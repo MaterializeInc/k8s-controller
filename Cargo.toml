@@ -2,9 +2,12 @@
 name = "kube-controller"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "lightweight framework for writing kubernetes controllers"
+repository = "https://github.com/MaterializeInc/kube-controller"
+readme = "README.md"
+license = "Apache-2.0"
+include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 
 [dependencies]
 async-trait = "0.1.71"
@@ -15,3 +18,9 @@ kube-runtime = "0.77"
 rand = "0.8.5"
 serde = "1.0.167"
 tracing = "0.1.37"
+
+[dev-dependencies]
+tokio = "1.29.1"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docs_rs"]
