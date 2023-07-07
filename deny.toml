@@ -1,0 +1,38 @@
+targets = [
+    { triple = "aarch64-apple-darwin" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "x86_64-unknown-linux-gnu" },
+]
+
+[advisories]
+vulnerability = "deny"
+
+[bans]
+multiple-versions = "deny"
+skip = [
+    { name = "syn", version = "1.0.109" },
+    { name = "syn", version = "2.0.23" },
+]
+
+# Use `tracing` instead.
+[[bans.deny]]
+name = "env_logger"
+
+# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
+# mature and more widely used.
+[[bans.deny]]
+name = "rustls"
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-DFS-2016",
+]
+copyleft = "deny"
+
+[sources]
+unknown-git = "deny"
+unknown-registry = "deny"
