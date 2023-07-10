@@ -23,6 +23,10 @@ jobs:
       with:
         command: clippy
         args: -- --deny warnings
+    - uses: actions-rs/cargo@v1
+      with:
+        command: deny
+        args: check
   test:
     runs-on: ubuntu-20.04
     steps:
