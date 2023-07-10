@@ -1,10 +1,10 @@
 [package]
-name = "kube-controller"
+name = "k8s-controller"
 version = "0.1.0"
 edition = "2021"
 
 description = "lightweight framework for writing kubernetes controllers"
-repository = "https://github.com/MaterializeInc/kube-controller"
+repository = "https://github.com/MaterializeInc/k8s-controller"
 readme = "README.md"
 license = "Apache-2.0"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]

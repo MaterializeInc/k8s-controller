@@ -84,7 +84,7 @@
 //! }
 //!
 //! #[async_trait::async_trait]
-//! impl kube_controller::Context for PodCounter {
+//! impl k8s_controller::Context for PodCounter {
 //!     type Resource = Pod;
 //!     type Error = kube::Error;
 //!
@@ -133,7 +133,7 @@
 //! #     fn pod_count(&self) -> usize { todo!() }
 //! # }
 //! # #[async_trait::async_trait]
-//! # impl kube_controller::Context for PodCounter {
+//! # impl k8s_controller::Context for PodCounter {
 //! #     type Resource = Pod;
 //! #     type Error = kube::Error;
 //! #     const FINALIZER_NAME: &'static str = "example.com/pod-counter";
@@ -152,7 +152,7 @@
 //! let kube_config = Config::infer().await.unwrap();
 //! let kube_client = Client::try_from(kube_config).unwrap();
 //! let context = PodCounter::default();
-//! let controller = kube_controller::Controller::namespaced_all(
+//! let controller = k8s_controller::Controller::namespaced_all(
 //!     kube_client,
 //!     context.clone(),
 //!     ListParams::default(),

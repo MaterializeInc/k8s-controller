@@ -1,4 +1,4 @@
-# kube-controller
+# k8s-controller
 
 This crate implements a lightweight framework around
 [`kube_runtime::Controller`] which provides a simpler interface for common
@@ -19,7 +19,7 @@ impl PodCounter {
 }
 
 #[async_trait::async_trait]
-impl kube_controller::Context for PodCounter {
+impl k8s_controller::Context for PodCounter {
     type Resource = Pod;
     type Error = kube::Error;
 
@@ -54,7 +54,7 @@ Then you can run it against your Kubernetes cluster by creating a
 let kube_config = Config::infer().await.unwrap();
 let kube_client = Client::try_from(kube_config).unwrap();
 let context = PodCounter::default();
-let controller = kube_controller::Controller::namespaced_all(
+let controller = k8s_controller::Controller::namespaced_all(
     kube_client,
     context.clone(),
     ListParams::default(),
