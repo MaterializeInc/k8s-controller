@@ -194,7 +194,6 @@ where
 
 /// The [`Context`] trait should be implemented in order to provide callbacks
 /// for events that happen to resources watched by a [`Controller`].
-#[cfg_attr(docs_rs, feature(async_fn_in_trait))]
 #[cfg_attr(not(docs_rs), async_trait::async_trait)]
 pub trait Context {
     /// The type of Kubernetes [resource](Resource) that will be watched by
