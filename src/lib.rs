@@ -63,7 +63,7 @@
 //! This crate implements a lightweight framework around
 //! [`kube_runtime::Controller`] which provides a simpler interface for common
 //! controller patterns. To use it, you define the data that your controller is
-//! going to operate over, and implement the `Context` trait on that struct:
+//! going to operate over, and implement the [`Context`] trait on that struct:
 //!
 //! ```no_run
 //! # use std::collections::BTreeSet;

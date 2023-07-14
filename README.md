@@ -1,9 +1,10 @@
 # k8s-controller
 
 This crate implements a lightweight framework around
-[`kube_runtime::Controller`] which provides a simpler interface for common
-controller patterns. To use it, you define the data that your controller is
-going to operate over, and implement the `Context` trait on that struct:
+[`kube_runtime::Controller`](https://docs.rs/kube-runtime/latest/kube_runtime/controller/struct.Controller.html)
+which provides a simpler interface for common controller patterns. To use it,
+you define the data that your controller is going to operate over, and
+implement the `Context` trait on that struct:
 
 ```rust
 #[derive(Default, Clone)]
@@ -48,7 +49,7 @@ impl k8s_controller::Context for PodCounter {
 ```
 
 Then you can run it against your Kubernetes cluster by creating a
-[`Controller`]:
+`Controller`:
 
 ```rust
 let kube_config = Config::infer().await.unwrap();
