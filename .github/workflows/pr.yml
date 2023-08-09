@@ -23,10 +23,9 @@ jobs:
       with:
         command: clippy
         args: -- --deny warnings
-    - uses: actions-rs/cargo@v1
+    - uses: EmbarkStudios/cargo-deny-action@v1
       with:
-        command: deny
-        args: check
+        command: check
   test:
     runs-on: ubuntu-20.04
     steps:
