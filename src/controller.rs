@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
-use kube::api::{Api, ListParams};
+use kube::api::Api;
 use kube::core::{ClusterResourceScope, NamespaceResourceScope};
 use kube::{Client, Resource, ResourceExt};
 use kube_runtime::controller::Action;
 use kube_runtime::finalizer::{finalizer, Event};
+use kube_runtime::watcher;
 use rand::{thread_rng, Rng};
 use tracing::{event, Level};
 
@@ -45,10 +46,10 @@ where
     /// `client`. The `context` given determines the type of resource
     /// to watch (via the [`Context::Resource`] type provided as part of
     /// the trait implementation). The resources to be watched will be
-    /// limited to resources in the given `namespace`. A [`ListParams`]
+    /// limited to resources in the given `namespace`. A [`watcher::Config`]
     /// can be given to limit the resources watched (for instance,
-    /// `ListParams::default().labels("app=myapp")`).
-    pub fn namespaced(client: Client, context: Ctx, namespace: &str, lp: ListParams) -> Self
+    /// `watcher::Config::default().labels("app=myapp")`).
+    pub fn namespaced(client: Client, context: Ctx, namespace: &str, wc: watcher::Config) -> Self
     where
         Ctx::Resource: Resource<Scope = NamespaceResourceScope>,
     {
@@ -60,7 +61,7 @@ where
         };
         let controller = kube_runtime::controller::Controller::new(
             Api::<Ctx::Resource>::namespaced(client.clone(), namespace),
-            lp,
+            wc,
         );
         Self {
             client,
@@ -74,10 +75,10 @@ where
     /// `client`. The `context` given determines the type of resource to
     /// watch (via the [`Context::Resource`] type provided as part of the
     /// trait implementation). The resources to be watched will not be
-    /// limited by namespace. A [`ListParams`] can be given to limit the
+    /// limited by namespace. A [`watcher::Config`] can be given to limit the
     /// resources watched (for instance,
-    /// `ListParams::default().labels("app=myapp")`).
-    pub fn namespaced_all(client: Client, context: Ctx, lp: ListParams) -> Self
+    /// `watcher::Config::default().labels("app=myapp")`).
+    pub fn namespaced_all(client: Client, context: Ctx, wc: watcher::Config) -> Self
     where
         Ctx::Resource: Resource<Scope = NamespaceResourceScope>,
     {
@@ -89,7 +90,7 @@ where
         };
         let controller = kube_runtime::controller::Controller::new(
             Api::<Ctx::Resource>::all(client.clone()),
-            lp,
+            wc,
         );
         Self {
             client,
@@ -102,10 +103,10 @@ where
     /// Creates a new controller for a cluster-scoped resource using the
     /// given `client`. The `context` given determines the type of resource
     /// to watch (via the [`Context::Resource`] type provided as part of the
-    /// trait implementation). A [`ListParams`] can be given to limit the
+    /// trait implementation). A [`watcher::Config`] can be given to limit the
     /// resources watched (for instance,
-    /// `ListParams::default().labels("app=myapp")`).
-    pub fn cluster(client: Client, context: Ctx, lp: ListParams) -> Self
+    /// `watcher::Config::default().labels("app=myapp")`).
+    pub fn cluster(client: Client, context: Ctx, wc: watcher::Config) -> Self
     where
         Ctx::Resource: Resource<Scope = ClusterResourceScope>,
     {
@@ -115,7 +116,7 @@ where
         };
         let controller = kube_runtime::controller::Controller::new(
             Api::<Ctx::Resource>::all(client.clone()),
-            lp,
+            wc,
         );
         Self {
             client,

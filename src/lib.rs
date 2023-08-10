@@ -123,8 +123,8 @@
 //! # use std::time::Duration;
 //! # use k8s_openapi::api::core::v1::Pod;
 //! # use kube::{Config, Client};
-//! # use kube::api::ListParams;
 //! # use kube_runtime::controller::Action;
+//! # use kube_runtime::watcher;
 //! # use tokio::task;
 //! # #[derive(Default, Clone)]
 //! # struct PodCounter {
@@ -156,7 +156,7 @@
 //! let controller = k8s_controller::Controller::namespaced_all(
 //!     kube_client,
 //!     context.clone(),
-//!     ListParams::default(),
+//!     watcher::Config::default(),
 //! );
 //! task::spawn(controller.run());
 //!
