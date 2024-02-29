@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2024-02-29
+
+### Changed
+ * Allow for configurable max reconciliation concurrency.
+
+
 ## [0.2.0] - 2023-08-09
 
 ### Changed
