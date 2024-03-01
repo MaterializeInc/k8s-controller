@@ -62,10 +62,6 @@ where
         let controller = kube_runtime::controller::Controller::new(
             Api::<Ctx::Resource>::namespaced(client.clone(), namespace),
             wc,
-        )
-        .with_config(
-            kube_runtime::Config::default()
-                .concurrency(Ctx::MAX_CONCURRENT_RECILIATIONS.to_owned()),
         );
         Self {
             client,
@@ -95,10 +91,6 @@ where
         let controller = kube_runtime::controller::Controller::new(
             Api::<Ctx::Resource>::all(client.clone()),
             wc,
-        )
-        .with_config(
-            kube_runtime::Config::default()
-                .concurrency(Ctx::MAX_CONCURRENT_RECILIATIONS.to_owned()),
         );
         Self {
             client,
@@ -125,10 +117,6 @@ where
         let controller = kube_runtime::controller::Controller::new(
             Api::<Ctx::Resource>::all(client.clone()),
             wc,
-        )
-        .with_config(
-            kube_runtime::Config::default()
-                .concurrency(Ctx::MAX_CONCURRENT_RECILIATIONS.to_owned()),
         );
         Self {
             client,
@@ -203,6 +191,13 @@ where
             })
             .await
     }
+
+    pub fn with_concurrency(mut self, concurrency: u16) -> Self {
+        self.controller = self
+            .controller
+            .with_config(kube_runtime::Config::default().concurrency(concurrency));
+        self
+    }
 }
 
 /// The [`Context`] trait should be implemented in order to provide callbacks
@@ -220,12 +215,6 @@ pub trait Context {
     /// controllers - if multiple controllers with the same finalizer name
     /// run against the same resource, unexpected behavior can occur.
     const FINALIZER_NAME: &'static str;
-
-    /// Max objects to reconcile concurrently.
-    /// Set to 0 for unbound concurrency.
-    /// Regardless of this attribute a given object
-    /// will not be reconciled twice at the same time.
-    const MAX_CONCURRENT_RECILIATIONS: &'static u16 = &0u16;
 
     /// This method is called when a watched resource is created or updated.
     /// The [`Client`] used by the controller is passed in to allow making
