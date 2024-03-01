@@ -1,6 +1,6 @@
 [package]
 name = "k8s-controller"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 description = "lightweight framework for writing kubernetes controllers"
@@ -10,17 +10,17 @@ license = "Apache-2.0"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 
 [dependencies]
-async-trait = "0.1.71"
-futures = "0.3.28"
+async-trait = "0.1"
+futures = "0.3"
 k8s-openapi = { version = "0.20", features = ["v1_26"] }
 kube = { version = "0.87", default-features = false, features = ["client"] }
 kube-runtime = "0.87"
-rand = "0.8.5"
-serde = "1.0.167"
-tracing = "0.1.37"
+rand = "0.8"
+serde = "1"
+tracing = "0.1"
 
 [dev-dependencies]
-tokio = "1.29.1"
+tokio = "1"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docs_rs"]
