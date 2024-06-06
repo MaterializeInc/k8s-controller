@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.1] - 2024-06-06
+
+### Changed
+
+* Update k8s-openapi feature to `v1_28`.
+
 ## [0.3.0] - 2024-03-01
 
 ### Changed
@@ -19,7 +25,7 @@
 * Upgrade `kube` and `kube-runtime` to `0.85`
     * This includes an interface change that replaces `ListParams` with `watcher::Config`, described here: https://github.com/MaterializeInc/kube-rs/blob/master/CHANGELOG.md#listwatch-changes
     * The `namespaced`, `namespaced_all`, and `cluster` methods have been updated correspondingly; this will require an update if you are using them.
-* Upgrade `k8s-openapi` to `0.19` with `v1_25` enabled 
+* Upgrade `k8s-openapi` to `0.19` with `v1_25` enabled
 
 ## [0.1.1] - 2023-07-14
 
