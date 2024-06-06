@@ -1,6 +1,6 @@
 [package]
 name = "k8s-controller"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 description = "lightweight framework for writing kubernetes controllers"
@@ -12,7 +12,7 @@ include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 [dependencies]
 async-trait = "0.1"
 futures = "0.3"
-k8s-openapi = { version = "0.20", features = ["v1_26"] }
+k8s-openapi = { version = "0.20", features = ["v1_28"] }
 kube = { version = "0.87", default-features = false, features = ["client"] }
 kube-runtime = "0.87"
 rand = "0.8"
