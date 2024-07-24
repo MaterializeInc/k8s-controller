@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2] - 2024-07-23
+
+### Changed
+
+* Upgrade `kube` and `kube-runtime` to `0.92.1`
+* Upgrade `k8s-openapi` to `0.22.0`.
+
 ## [0.3.1] - 2024-06-06
 
 ### Changed
