@@ -59,7 +59,7 @@
 #![warn(clippy::disallowed_macros)]
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
-#![cfg_attr(docs_rs, feature(async_fn_in_trait))]
+#![cfg_attr(docsrs, feature(async_fn_in_trait))]
 
 //! This crate implements a lightweight framework around
 //! [`kube_runtime::Controller`] which provides a simpler interface for common
