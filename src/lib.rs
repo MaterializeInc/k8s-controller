@@ -35,7 +35,7 @@
 #![warn(clippy::wildcard_in_or_patterns)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
-#![warn(clippy::overflow_check_conditional)]
+#![warn(clippy::panicking_overflow_checks)]
 #![warn(clippy::as_conversions)]
 #![warn(clippy::match_overlapping_arm)]
 #![warn(clippy::zero_divided_by_zero)]
