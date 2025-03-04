@@ -2,6 +2,7 @@
 name = "k8s-controller"
 version = "0.4.0"
 edition = "2021"
+rust-version = "1.83.0"
 
 description = "lightweight framework for writing kubernetes controllers"
 repository = "https://github.com/MaterializeInc/k8s-controller"
