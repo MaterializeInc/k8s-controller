@@ -3,8 +3,8 @@ on:
   pull_request:
 
 env:
-  DOCKER_BUILDKIT: 1
-  K8S_OPENAPI_ENABLED_VERSION: 1.29
+  DOCKER_BUILDKIT: "1"
+  K8S_OPENAPI_ENABLED_VERSION: "1.30"
 
 jobs:
   lint:
