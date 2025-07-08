@@ -9,15 +9,12 @@ targets = [
 [advisories]
 version = 2
 ignore = [
-  # Dependency of kube, and has no known version without it.
-  # This is just saying the "instant" crate is unmaintained, but nothing is
-  # actively dangerous yet.
-  "RUSTSEC-2024-0384",
 ]
 
 [bans]
 multiple-versions = "deny"
 skip = [
+    { name = "getrandom", version = "0.2.15" },
     { name = "thiserror", version = "1.0.69" },
     { name = "thiserror-impl", version = "1.0.69" },
 ]
@@ -35,7 +32,6 @@ name = "rustls"
 version = 2
 allow = [
     "Apache-2.0",
-    "BSD-3-Clause",
     "MIT",
     "Unicode-3.0",
     "Zlib",

@@ -11,7 +11,7 @@ use kube::{Client, Resource, ResourceExt};
 use kube_runtime::controller::Action;
 use kube_runtime::finalizer::{finalizer, Event};
 use kube_runtime::watcher;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use tracing::{event, Level};
 
 /// The [`Controller`] watches a set of resources, calling methods on the
@@ -251,7 +251,7 @@ pub trait Context {
         // use a better name for the parameter name in the docs
         let _resource = resource;
 
-        Action::requeue(Duration::from_secs(thread_rng().gen_range(2400..3600)))
+        Action::requeue(Duration::from_secs(rng().random_range(2400..3600)))
     }
 
     /// This method is called when a call to [`apply`](Self::apply) or
@@ -273,7 +273,7 @@ pub trait Context {
 
         let seconds = 2u64.pow(consecutive_errors.min(7) + 1);
         Action::requeue(Duration::from_millis(
-            thread_rng().gen_range((seconds * 500)..(seconds * 1000)),
+            rng().random_range((seconds * 500)..(seconds * 1000)),
         ))
     }
 

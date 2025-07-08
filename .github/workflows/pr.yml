@@ -4,7 +4,7 @@ on:
 
 env:
   DOCKER_BUILDKIT: "1"
-  K8S_OPENAPI_ENABLED_VERSION: "1.30"
+  K8S_OPENAPI_ENABLED_VERSION: "1.31"
 
 jobs:
   lint:
