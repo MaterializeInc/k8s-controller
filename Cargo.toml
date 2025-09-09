@@ -1,8 +1,8 @@
 [package]
 name = "k8s-controller"
-version = "0.5.0"
-edition = "2021"
-rust-version = "1.83.0"
+version = "0.6.0"
+edition = "2024"
+rust-version = "1.89.0"
 
 description = "lightweight framework for writing kubernetes controllers"
 repository = "https://github.com/MaterializeInc/k8s-controller"
@@ -13,12 +13,12 @@ include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 [dependencies]
 async-trait = "0.1"
 futures = "0.3"
-kube = { version = "1.1.0", default-features = false, features = ["client"] }
-kube-runtime = "1.1.0"
+kube = { version = "2.0.0", default-features = false, features = ["client"] }
+kube-runtime = "2.0.0"
 rand = "0.9.0"
 serde = "1"
 tracing = "0.1"
 
 [dev-dependencies]
-k8s-openapi = { version = "0.25.0", default-features = false, features = ["v1_31"] }
+k8s-openapi = { version = "0.26.0", default-features = false, features = ["v1_31"] }
 tokio = "1"
