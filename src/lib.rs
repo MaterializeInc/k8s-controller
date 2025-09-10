@@ -30,7 +30,7 @@
 #![warn(clippy::useless_conversion)]
 #![warn(clippy::builtin_type_shadow)]
 #![warn(clippy::duplicate_underscore_argument)]
-#![warn(clippy::double_neg)]
+#![warn(double_negations)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
 #![warn(clippy::crosspointer_transmute)]

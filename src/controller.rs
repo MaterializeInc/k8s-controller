@@ -9,10 +9,10 @@ use kube::api::Api;
 use kube::core::{ClusterResourceScope, NamespaceResourceScope};
 use kube::{Client, Resource, ResourceExt};
 use kube_runtime::controller::Action;
-use kube_runtime::finalizer::{finalizer, Event};
+use kube_runtime::finalizer::{Event, finalizer};
 use kube_runtime::watcher;
-use rand::{rng, Rng};
-use tracing::{event, Level};
+use rand::{Rng, rng};
+use tracing::{Level, event};
 
 /// The [`Controller`] watches a set of resources, calling methods on the
 /// provided [`Context`] when events occur.
