@@ -192,10 +192,17 @@ where
             .await
     }
 
-    pub fn with_concurrency(mut self, concurrency: u16) -> Self {
-        self.controller = self
-            .controller
-            .with_config(kube_runtime::Config::default().concurrency(concurrency));
+    /// Allow configuring the underlying [`kube_runtime::Controller`]. For
+    /// example, you can use
+    /// `controller.with_controller(|controller| controller.with_config(Config::default().concurrency(10)))`
+    /// to limit the created controller to reconciling 10 resources at once.
+    pub fn with_controller<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(
+            kube_runtime::Controller<Ctx::Resource>,
+        ) -> kube_runtime::Controller<Ctx::Resource>,
+    {
+        self.controller = f(self.controller);
         self
     }
 }
