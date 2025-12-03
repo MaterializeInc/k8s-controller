@@ -89,7 +89,7 @@
 //!     type Resource = Pod;
 //!     type Error = kube::Error;
 //!
-//!     const FINALIZER_NAME: &'static str = "example.com/pod-counter";
+//!     const FINALIZER_NAME: Option<&'static str> = Some("example.com/pod-counter");
 //!
 //!     async fn apply(
 //!         &self,
@@ -137,7 +137,7 @@
 //! # impl k8s_controller::Context for PodCounter {
 //! #     type Resource = Pod;
 //! #     type Error = kube::Error;
-//! #     const FINALIZER_NAME: &'static str = "example.com/pod-counter";
+//! #     const FINALIZER_NAME: Option<&'static str> = Some("example.com/pod-counter");
 //! #     async fn apply(
 //! #         &self,
 //! #         client: Client,
