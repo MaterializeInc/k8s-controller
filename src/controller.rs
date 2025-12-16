@@ -357,7 +357,7 @@ pub trait Context {
             })
             .await
             .map_err(Error::FinalizerError)
-        } else {
+        } else if resource.meta().deletion_timestamp.is_none() {
             ran = true;
             event!(
                 Level::INFO,
@@ -374,6 +374,8 @@ pub trait Context {
             } else {
                 self.success_action(&resource)
             })
+        } else {
+            Ok(Action::await_change())
         };
         if !ran {
             event!(
