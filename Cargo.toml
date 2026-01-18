@@ -13,7 +13,7 @@ include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 [dependencies]
 async-trait = "0.1"
 futures = "0.3"
-kube = { version = "2.0.1", default-features = false, features = ["client"] }
+kube = { version = "3.0.0", default-features = false, features = ["client"] }
 kube-runtime = "2.0.1"
 rand = "0.9.2"
 serde = "1"
