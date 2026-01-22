@@ -16,8 +16,6 @@ multiple-versions = "deny"
 skip = [
     { name = "thiserror", version = "1.0.69" },
     { name = "thiserror-impl", version = "1.0.69" },
-    # waiting on https://github.com/kube-rs/kube/pull/1826 to merge
-    { name = "hashbrown", version = "0.15.5" },
 ]
 
 # Use `tracing` instead.

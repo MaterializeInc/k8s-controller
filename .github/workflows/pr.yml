@@ -30,7 +30,7 @@ jobs:
       with:
         toolchain: 1.89.0
         command: install
-        args: --locked cargo-deny --version=0.16.2
+        args: --locked cargo-deny --version=0.19.0
     - uses: actions-rs/cargo@v1
       with:
         toolchain: 1.89.0
