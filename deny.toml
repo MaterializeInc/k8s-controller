@@ -14,23 +14,20 @@ ignore = [
 [bans]
 multiple-versions = "deny"
 skip = [
-    { name = "thiserror", version = "1.0.69" },
-    { name = "thiserror-impl", version = "1.0.69" },
+    # kube-runtime pulls hashbrown 0.16, while serde_yaml (via indexmap) pulls 0.17.
+    { name = "hashbrown", version = "0.16.1" },
 ]
 
 # Use `tracing` instead.
 [[bans.deny]]
 name = "env_logger"
 
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
-[[bans.deny]]
-name = "rustls"
-
 [licenses]
 version = 2
 allow = [
     "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
     "MIT",
     "Unicode-3.0",
     "Zlib",

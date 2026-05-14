@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
-use kube::api::Api;
+use json_patch::jsonptr::PointerBuf;
+use json_patch::{AddOperation, PatchOperation, RemoveOperation, TestOperation};
+use kube::api::{Api, Patch, PatchParams};
 use kube::core::{ClusterResourceScope, NamespaceResourceScope};
 use kube::{Client, Resource, ResourceExt};
 use kube_runtime::controller::Action;
-use kube_runtime::finalizer::{Event, finalizer};
 use kube_runtime::watcher;
 use rand::{Rng, rng};
 use tracing::{Level, event};
@@ -326,37 +328,140 @@ pub trait Context {
         let kind = Self::Resource::kind(&dynamic_type).into_owned();
         let mut ran = false;
         let res = if let Some(finalizer_name) = Self::FINALIZER_NAME {
-            finalizer(&api, finalizer_name, Arc::clone(&resource), |event| async {
-                ran = true;
-                event!(
-                    Level::INFO,
-                    resource_name = %resource.name_unchecked().as_str(),
-                    controller = Self::FINALIZER_NAME,
-                    "Reconciling {} ({}).",
-                    kind,
-                    match event {
-                        Event::Apply(_) => "apply",
-                        Event::Cleanup(_) => "cleanup",
-                    }
-                );
-                let action = match event {
-                    Event::Apply(resource) => {
-                        let action = self.apply(client, &resource).await?;
-                        if let Some(action) = action {
-                            action
-                        } else {
-                            self.success_action(&resource)
+            // We manage the finalizer ourselves rather than going through
+            // `kube_runtime::finalizer`, because that helper unconditionally
+            // removes the finalizer whenever the cleanup closure returns `Ok`.
+            // We only want to remove it when `cleanup` returns `Ok(None)`
+            // (cleanup complete); `Ok(Some(action))` means the caller wants to
+            // requeue and run cleanup again, so the finalizer must stay.
+            //
+            // The patches below mirror `kube_runtime::finalizer`: each is
+            // guarded by an RFC 6902 `Test` op so we fail (and a fresh
+            // reconcile fires) instead of clobbering another controller's
+            // finalizer if the list shifted underneath us.
+            let name = resource.name_unchecked();
+            let finalizer_i = resource
+                .finalizers()
+                .iter()
+                .position(|f| f == finalizer_name);
+            let is_deleting = resource.meta().deletion_timestamp.is_some();
+            match (finalizer_i, is_deleting) {
+                (Some(_), false) => {
+                    // Finalizer present and not deleting: run the apply event.
+                    ran = true;
+                    event!(
+                        Level::INFO,
+                        resource_name = %name.as_str(),
+                        controller = Self::FINALIZER_NAME,
+                        "Reconciling {} (apply).",
+                        kind,
+                    );
+                    let action = self.apply(client, &resource).await.map_err(|e| {
+                        Error::FinalizerError(kube_runtime::finalizer::Error::ApplyFailed(e))
+                    })?;
+                    Ok(action.unwrap_or_else(|| self.success_action(&resource)))
+                }
+                (None, false) => {
+                    // Not deleting and finalizer missing: add it. No point
+                    // running apply here, since the patch triggers a fresh
+                    // reconcile that lands in the arm above.
+                    let patch = if resource.meta().finalizers.is_none() {
+                        // No `finalizers` field at all: test that it's absent,
+                        // then create it with our finalizer. (An empty array
+                        // `Some([])` takes the append path below, since the
+                        // field exists.)
+                        json_patch::Patch(vec![
+                            PatchOperation::Test(TestOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers")
+                                    .expect("constructed pointer is valid"),
+                                // `serde_json::Value`'s default is `Null`; we
+                                // don't depend on `serde_json` directly so name
+                                // it via the field type rather than the path.
+                                value: Default::default(),
+                            }),
+                            PatchOperation::Add(AddOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers")
+                                    .expect("constructed pointer is valid"),
+                                value: vec![finalizer_name].into(),
+                            }),
+                        ])
+                    } else {
+                        // Kubernetes doesn't deduplicate finalizers, so test the
+                        // current list and fail/retry if anyone else appended in
+                        // the meantime.
+                        json_patch::Patch(vec![
+                            PatchOperation::Test(TestOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers")
+                                    .expect("constructed pointer is valid"),
+                                value: resource.finalizers().into(),
+                            }),
+                            PatchOperation::Add(AddOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers/-")
+                                    .expect("constructed pointer is valid"),
+                                value: finalizer_name.into(),
+                            }),
+                        ])
+                    };
+                    api.patch::<Self::Resource>(
+                        &name,
+                        &PatchParams::default(),
+                        &Patch::Json(patch),
+                    )
+                    .await
+                    .map_err(|e| {
+                        Error::FinalizerError(kube_runtime::finalizer::Error::AddFinalizer(e))
+                    })?;
+                    Ok(Action::await_change())
+                }
+                (Some(finalizer_i), true) => {
+                    // Deleting with our finalizer present: run cleanup. Only
+                    // remove the finalizer once cleanup reports completion
+                    // (`Ok(None)`); a returned action means "requeue and run
+                    // cleanup again", so the finalizer stays in place.
+                    ran = true;
+                    event!(
+                        Level::INFO,
+                        resource_name = %name.as_str(),
+                        controller = Self::FINALIZER_NAME,
+                        "Reconciling {} (cleanup).",
+                        kind,
+                    );
+                    match self.cleanup(client, &resource).await {
+                        Err(e) => Err(Error::FinalizerError(
+                            kube_runtime::finalizer::Error::CleanupFailed(e),
+                        )),
+                        Ok(Some(action)) => Ok(action),
+                        Ok(None) => {
+                            let finalizer_path = format!("/metadata/finalizers/{finalizer_i}");
+                            let pointer = PointerBuf::from_str(&finalizer_path)
+                                .expect("constructed pointer is valid");
+                            let patch = json_patch::Patch(vec![
+                                PatchOperation::Test(TestOperation {
+                                    path: pointer.clone(),
+                                    value: finalizer_name.into(),
+                                }),
+                                PatchOperation::Remove(RemoveOperation { path: pointer }),
+                            ]);
+                            api.patch::<Self::Resource>(
+                                &name,
+                                &PatchParams::default(),
+                                &Patch::Json(patch),
+                            )
+                            .await
+                            .map_err(|e| {
+                                Error::FinalizerError(
+                                    kube_runtime::finalizer::Error::RemoveFinalizer(e),
+                                )
+                            })?;
+                            Ok(Action::await_change())
                         }
                     }
-                    Event::Cleanup(resource) => self
-                        .cleanup(client, &resource)
-                        .await?
-                        .unwrap_or_else(Action::await_change),
-                };
-                Ok(action)
-            })
-            .await
-            .map_err(Error::FinalizerError)
+                }
+                (None, true) => {
+                    // Deleting and our finalizer already gone: nothing to do.
+                    Ok(Action::await_change())
+                }
+            }
         } else if resource.meta().deletion_timestamp.is_none() {
             ran = true;
             event!(
