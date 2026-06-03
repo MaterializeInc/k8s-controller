@@ -40,6 +40,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v2
+    - uses: helm/kind-action@v1
+      with:
+        cluster_name: k8s-controller-test
+        wait: 180s
     - uses: actions-rs/toolchain@v1
       with:
         toolchain: 1.89.0
