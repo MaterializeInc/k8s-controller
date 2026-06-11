@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::fmt::Display;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
@@ -12,7 +13,8 @@ use kube_runtime::controller::Action;
 use kube_runtime::finalizer::{Event, finalizer};
 use kube_runtime::watcher;
 use rand::{Rng, rng};
-use tracing::{Level, event};
+use tracing::field::Empty;
+use tracing::{Instrument, Span, error, info, info_span, trace, warn};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<E: std::error::Error + 'static> {
@@ -20,6 +22,15 @@ pub enum Error<E: std::error::Error + 'static> {
     ControllerError(#[source] E),
     #[error("{0}")]
     FinalizerError(#[source] kube_runtime::finalizer::Error<E>),
+}
+
+#[derive(Debug, Default)]
+pub struct TraceMetadata(BTreeMap<String, String>);
+
+impl TraceMetadata {
+    pub fn annotate<K: Display, V: Display>(&mut self, key: K, val: V) {
+        self.0.insert(key.to_string(), val.to_string());
+    }
 }
 
 /// The [`Controller`] watches a set of resources, calling methods on the
@@ -173,27 +184,19 @@ where
                 },
                 Arc::new(context),
             )
-            .for_each(|reconciliation_result| async move {
-                let dynamic_type = Default::default();
-                let kind = Ctx::Resource::kind(&dynamic_type).into_owned();
-                match reconciliation_result {
-                    Ok(resource) => {
-                        event!(
-                            Level::INFO,
-                            resource_name = %resource.0.name,
-                            controller = Ctx::FINALIZER_NAME,
-                            "{} reconciliation successful.",
-                            kind
-                        );
-                    }
-                    Err(err) => event!(
-                        Level::ERROR,
-                        err = %err,
-                        source = err.source(),
-                        controller = Ctx::FINALIZER_NAME,
-                        "{} reconciliation error.",
-                        kind
-                    ),
+            .for_each(|res| async {
+                // ReconcilerFailed errors will already have been reported by
+                // the _reconcile function
+                if let Err(e) = res
+                    && !matches!(e, kube_runtime::controller::Error::ReconcilerFailed(..))
+                {
+                    // warn instead of error because these kinds of errors
+                    // are almost always recoverable
+                    warn!(
+                        error = %e,
+                        source = e.source(),
+                        "internal kube controller error",
+                    );
                 }
             })
             .await
@@ -244,6 +247,7 @@ pub trait Context {
         &self,
         client: Client,
         resource: &Self::Resource,
+        metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error>;
 
     /// This method is called when a watched resource is marked for deletion.
@@ -259,10 +263,12 @@ pub trait Context {
         &self,
         client: Client,
         resource: &Self::Resource,
+        metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         // use a better name for the parameter name in the docs
         let _client = client;
         let _resource = resource;
+        let _metadata = metadata;
 
         Ok(Some(Action::await_change()))
     }
@@ -322,75 +328,89 @@ pub trait Context {
             + std::fmt::Debug
             + std::marker::Unpin,
     {
-        let dynamic_type = Default::default();
-        let kind = Self::Resource::kind(&dynamic_type).into_owned();
-        let mut ran = false;
-        let res = if let Some(finalizer_name) = Self::FINALIZER_NAME {
-            finalizer(&api, finalizer_name, Arc::clone(&resource), |event| async {
-                ran = true;
-                event!(
-                    Level::INFO,
-                    resource_name = %resource.name_unchecked().as_str(),
-                    controller = Self::FINALIZER_NAME,
-                    "Reconciling {} ({}).",
-                    kind,
+        let span = info_span!(
+            "reconcile",
+            resource_type = Self::Resource::kind(&Default::default()).as_ref(),
+            resource_name = resource.name_unchecked().as_str(),
+            controller = Self::FINALIZER_NAME,
+            event_type = Empty,
+            success = Empty,
+            duration_seconds = Empty,
+            metadata = Empty,
+        );
+        async {
+            trace!("beginning reconciliation");
+
+            let mut metadata = TraceMetadata::default();
+            let mut ran = false;
+            let start = Instant::now();
+
+            let res = if let Some(finalizer_name) = Self::FINALIZER_NAME {
+                finalizer(&api, finalizer_name, Arc::clone(&resource), |event| async {
+                    ran = true;
+                    Span::current().record(
+                        "event_type",
+                        match event {
+                            Event::Apply(_) => "apply",
+                            Event::Cleanup(_) => "cleanup",
+                        },
+                    );
                     match event {
-                        Event::Apply(_) => "apply",
-                        Event::Cleanup(_) => "cleanup",
+                        Event::Apply(resource) => self
+                            .apply(client, &resource, &mut metadata)
+                            .await
+                            .map(|action| action.unwrap_or_else(|| self.success_action(&resource))),
+                        Event::Cleanup(resource) => self
+                            .cleanup(client, &resource, &mut metadata)
+                            .await
+                            .map(|action| action.unwrap_or_else(Action::await_change)),
                     }
-                );
-                let action = match event {
-                    Event::Apply(resource) => {
-                        let action = self.apply(client, &resource).await?;
-                        if let Some(action) = action {
-                            action
-                        } else {
-                            self.success_action(&resource)
-                        }
-                    }
-                    Event::Cleanup(resource) => self
-                        .cleanup(client, &resource)
-                        .await?
-                        .unwrap_or_else(Action::await_change),
-                };
-                Ok(action)
-            })
-            .await
-            .map_err(Error::FinalizerError)
-        } else if resource.meta().deletion_timestamp.is_none() {
-            ran = true;
-            event!(
-                Level::INFO,
-                resource_name = %resource.name_unchecked().as_str(),
-                "Reconciling {} (apply).",
-                kind,
-            );
-            let action = self
-                .apply(client, &resource)
+                })
                 .await
-                .map_err(Error::ControllerError)?;
-            Ok(if let Some(action) = action {
-                action
+                .map_err(Error::FinalizerError)
+            } else if resource.meta().deletion_timestamp.is_none() {
+                ran = true;
+                Span::current().record("event_type", "apply");
+                self.apply(client, &resource, &mut metadata)
+                    .await
+                    .map(|action| action.unwrap_or_else(|| self.success_action(&resource)))
+                    .map_err(Error::ControllerError)
             } else {
-                self.success_action(&resource)
-            })
-        } else {
-            Ok(Action::await_change())
-        };
-        if !ran {
-            event!(
-                Level::INFO,
-                resource_name = %resource.name_unchecked().as_str(),
-                controller = Self::FINALIZER_NAME,
-                "Reconciling {} ({}).",
-                kind,
-                if resource.meta().deletion_timestamp.is_some() {
-                    "delete"
-                } else {
-                    "init"
-                }
-            );
+                Ok(Action::await_change())
+            };
+
+            // eventually we should set up metrics here, but this should
+            // help for now
+            Span::current().record("duration_seconds", start.elapsed().as_secs_f64());
+
+            if !ran {
+                Span::current().record(
+                    "event_type",
+                    if resource.meta().deletion_timestamp.is_some() {
+                        "delete"
+                    } else {
+                        "init"
+                    },
+                );
+            }
+
+            if !metadata.0.is_empty()
+                && let Ok(s) = serde_json::to_string(&metadata.0)
+            {
+                Span::current().record("metadata", s);
+            }
+
+            if let Err(e) = &res {
+                Span::current().record("success", false);
+                error!(error = %e, source = e.source(), "reconcile");
+            } else {
+                Span::current().record("success", true);
+                info!("reconcile");
+            }
+
+            res
         }
-        res
+        .instrument(span)
+        .await
     }
 }

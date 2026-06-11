@@ -95,6 +95,7 @@
 //!         &self,
 //!         client: Client,
 //!         pod: &Self::Resource,
+//!         _metadata: &mut k8s_controller::TraceMetadata,
 //!     ) -> Result<Option<Action>, Self::Error> {
 //!         let mut pods = self.pods.lock().unwrap();
 //!         pods.insert(pod.meta().uid.as_ref().unwrap().clone());
@@ -105,6 +106,7 @@
 //!         &self,
 //!         client: Client,
 //!         pod: &Self::Resource,
+//!         _metadata: &mut k8s_controller::TraceMetadata,
 //!     ) -> Result<Option<Action>, Self::Error> {
 //!         let mut pods = self.pods.lock().unwrap();
 //!         pods.remove(pod.meta().uid.as_ref().unwrap());
@@ -142,11 +144,13 @@
 //! #         &self,
 //! #         client: Client,
 //! #         pod: &Self::Resource,
+//! #         _metadata: &mut k8s_controller::TraceMetadata,
 //! #     ) -> Result<Option<Action>, Self::Error> { todo!() }
 //! #     async fn cleanup(
 //! #         &self,
 //! #         client: Client,
 //! #         pod: &Self::Resource,
+//! #         _metadata: &mut k8s_controller::TraceMetadata,
 //! #     ) -> Result<Option<Action>, Self::Error> { todo!() }
 //! # }
 //! # async fn foo() {
@@ -169,4 +173,4 @@
 
 mod controller;
 
-pub use controller::{Context, Controller};
+pub use controller::{Context, Controller, TraceMetadata};

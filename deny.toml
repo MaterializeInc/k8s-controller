@@ -14,8 +14,6 @@ ignore = [
 [bans]
 multiple-versions = "deny"
 skip = [
-    { name = "thiserror", version = "1.0.69" },
-    { name = "thiserror-impl", version = "1.0.69" },
 ]
 
 # Use `tracing` instead.
