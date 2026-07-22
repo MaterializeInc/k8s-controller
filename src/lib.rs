@@ -170,7 +170,59 @@
 //! }
 //! # }
 //! ```
+//!
+//! If you run multiple replicas of your controller (for instance, to avoid
+//! downtime of webhooks served by the same process during rollouts), you
+//! can use [leader election](LeaderElection) to ensure that only one
+//! replica reconciles at a time:
+//!
+//! ```no_run
+//! # use std::collections::BTreeSet;
+//! # use std::sync::{Arc, Mutex};
+//! # use k8s_openapi::api::core::v1::Pod;
+//! # use kube::{Config, Client};
+//! # use kube_runtime::controller::Action;
+//! # use kube_runtime::watcher;
+//! # #[derive(Default, Clone)]
+//! # struct PodCounter {
+//! #     pods: Arc<Mutex<BTreeSet<String>>>,
+//! # }
+//! # #[async_trait::async_trait]
+//! # impl k8s_controller::Context for PodCounter {
+//! #     type Resource = Pod;
+//! #     type Error = kube::Error;
+//! #     const FINALIZER_NAME: Option<&'static str> = Some("example.com/pod-counter");
+//! #     async fn apply(
+//! #         &self,
+//! #         client: Client,
+//! #         pod: &Self::Resource,
+//! #         _metadata: &mut k8s_controller::TraceMetadata,
+//! #     ) -> Result<Option<Action>, Self::Error> { todo!() }
+//! # }
+//! # async fn foo() {
+//! # let kube_config = Config::infer().await.unwrap();
+//! # let kube_client = Client::try_from(kube_config).unwrap();
+//! # let context = PodCounter::default();
+//! let controller = k8s_controller::Controller::namespaced_all(
+//!     kube_client.clone(),
+//!     context,
+//!     watcher::Config::default(),
+//! );
+//! let leader_election = k8s_controller::LeaderElection::new(
+//!     kube_client,
+//!     "my-namespace",
+//!     "pod-counter",
+//!     // must be unique per replica; the pod name is a good choice
+//!     &std::env::var("HOSTNAME").unwrap(),
+//! );
+//! controller.run_with_leader_election(leader_election).await;
+//! // leadership was lost; exit and let Kubernetes restart the process
+//! std::process::exit(1);
+//! # }
+//! ```
 
 mod controller;
+mod leader_election;
 
 pub use controller::{Context, Controller, TraceMetadata};
+pub use leader_election::LeaderElection;
