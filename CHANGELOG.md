@@ -4,10 +4,12 @@
 
 ### Added
 
-* `LeaderElection` and `Controller::run_with_leader_election`, providing
-  lease-based leader election so that multiple replicas of a controller can
-  run with only one reconciling at a time. `LeaderElection::release` allows
-  handing leadership over immediately during graceful shutdown.
+* `LeaderElection`, providing lease-based leader election so that multiple
+  replicas of a controller can run with only one reconciling at a time.
+  `LeaderElection::with_lease` runs an arbitrary future (for instance, one
+  or several `Controller::run` futures) while holding the lease.
+  `LeaderElection::release` allows handing leadership over immediately
+  during graceful shutdown.
 
 ### Changed
 

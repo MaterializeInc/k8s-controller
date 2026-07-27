@@ -1,6 +1,9 @@
 use std::error::Error as _;
+use std::future::Future;
+use std::pin::pin;
 use std::time::{Duration, Instant};
 
+use futures::future::{self, Either};
 use k8s_openapi::api::coordination::v1::{Lease, LeaseSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
 use k8s_openapi::jiff::Timestamp;
@@ -26,9 +29,15 @@ use tracing::{debug, error, info, warn};
 /// permissions on `leases` in the `coordination.k8s.io` API group for this
 /// to work.
 ///
-/// The `identity` must be non-empty and unique to each running instance of
-/// the controller; the pod name (available in the `HOSTNAME` environment
-/// variable, or via the downward API) is a good choice.
+/// The `identity` must be non-empty and unique among the candidates for a
+/// given lease; the pod name (available in the `HOSTNAME` environment
+/// variable, or via the downward API) is a good choice. Beware that
+/// candidates for the same lease which share an identity will each mistake
+/// the other's renewals for their own and all act as leader simultaneously,
+/// so never create multiple `LeaderElection`s in the same process with the
+/// same lease name and identity. To have one lease guard several
+/// controllers in a process, share a single `LeaderElection` via
+/// [`with_lease`](LeaderElection::with_lease) instead.
 #[derive(Clone)]
 pub struct LeaderElection {
     api: Api<Lease>,
@@ -84,6 +93,55 @@ impl LeaderElection {
         self
     }
 
+    /// Wait until this instance holds the lease, then run `fut` while
+    /// renewing the lease in the background.
+    ///
+    /// If leadership is lost (because the lease could not be renewed in
+    /// time, or was taken over by another candidate), `fut` is dropped,
+    /// cancelling its work, and this method returns `None`. The caller
+    /// should then promptly either exit the process (letting Kubernetes
+    /// restart it) or rejoin the election by calling this method again.
+    /// Note that dropping `fut` cancels it cooperatively: work it has
+    /// spawned as separate tasks, or blocking code, is not cancelled. If
+    /// `fut` does such things, prefer exiting the process so that no work
+    /// outlives the lease.
+    ///
+    /// If `fut` completes on its own, the lease is voluntarily released
+    /// (handing leadership over immediately rather than making the other
+    /// candidates wait for it to expire) and its output is returned.
+    ///
+    /// To run a [`Controller`](crate::Controller) under a lease, pass its
+    /// [`run`](crate::Controller::run) future; to have one lease guard
+    /// several controllers (rather than electing a separate leader per
+    /// controller), pass a future that runs all of them, for instance:
+    ///
+    /// ```ignore
+    /// leader_election
+    ///     .with_lease(futures::future::join(controller_a.run(), controller_b.run()))
+    ///     .await;
+    /// ```
+    ///
+    /// During graceful shutdown (for instance, on receiving a termination
+    /// signal), drop the future returned by this method to stop its work,
+    /// then call [`release`](LeaderElection::release) on a clone of this
+    /// `LeaderElection` to hand leadership over immediately rather than
+    /// making the other replicas wait for the lease to expire.
+    ///
+    /// Panics if the configured timings are inconsistent or the identity is
+    /// empty.
+    pub async fn with_lease<F: Future>(&self, fut: F) -> Option<F::Output> {
+        let acquired_at = self.acquire().await;
+        let fut = pin!(fut);
+        let lost = pin!(self.hold(acquired_at));
+        match future::select(fut, lost).await {
+            Either::Left((output, _)) => {
+                self.release().await;
+                Some(output)
+            }
+            Either::Right(((), _)) => None,
+        }
+    }
+
     fn validate(&self) {
         assert!(!self.identity.is_empty(), "identity must not be empty");
         assert!(
@@ -94,15 +152,24 @@ impl LeaderElection {
             self.retry_period < self.renew_deadline,
             "retry_period must be less than renew_deadline"
         );
+        assert!(
+            i32::try_from(self.lease_duration.as_secs()).is_ok(),
+            "lease_duration must be at most i32::MAX seconds"
+        );
     }
 
     fn lease_duration_seconds(&self) -> i32 {
-        i32::try_from(self.lease_duration.as_secs()).unwrap_or(i32::MAX)
+        i32::try_from(self.lease_duration.as_secs())
+            .expect("lease_duration must be at most i32::MAX seconds")
     }
 
-    /// Wait until we hold the lease. Panics if the configured timings are
-    /// inconsistent or the identity is empty.
-    pub(crate) async fn acquire(&self) {
+    /// Wait until we hold the lease, returning the instant captured just
+    /// before the request that acquired it was sent (the pessimistic time
+    /// from which renewal deadlines must be measured; see [`hold`]). Panics
+    /// if the configured timings are inconsistent or the identity is empty.
+    ///
+    /// [`hold`]: LeaderElection::hold
+    async fn acquire(&self) -> Instant {
         self.validate();
         info!(
             lease_name = %self.lease_name,
@@ -111,6 +178,7 @@ impl LeaderElection {
         );
         let mut observed = None;
         loop {
+            let started = Instant::now();
             match self.try_acquire(&mut observed).await {
                 Ok(true) => {
                     info!(
@@ -118,7 +186,7 @@ impl LeaderElection {
                         identity = %self.identity,
                         "acquired leadership lease",
                     );
-                    return;
+                    return started;
                 }
                 Ok(false) => {
                     debug!(
@@ -221,18 +289,32 @@ impl LeaderElection {
     }
 
     /// Renew the lease until we lose it, then return. Only call this while
-    /// holding the lease.
-    pub(crate) async fn hold(&self) {
-        let mut last_renew = Instant::now();
+    /// holding the lease. `last_renew` must be an instant captured *before*
+    /// the request that last renewed (or acquired) the lease was sent.
+    ///
+    /// Renewals are measured from before their request is sent: other
+    /// candidates start their takeover clocks when they observe the written
+    /// lease, which can happen well before we receive the response, so
+    /// measuring from the response could extend our renew deadline past
+    /// their takeover time.
+    async fn hold(&self, mut last_renew: Instant) {
+        let mut interval = tokio::time::interval(self.retry_period);
+        // the first tick completes immediately, and the lease was just
+        // renewed by acquiring it
+        interval.tick().await;
         loop {
-            tokio::time::sleep(self.retry_period).await;
+            // an interval (rather than a sleep) keeps renewals at a
+            // consistent cadence even when an attempt is slow, rather than
+            // eating into the renew deadline budget between attempts
+            interval.tick().await;
             // bound each attempt by the time remaining until the renew
             // deadline, so that a hung request (the kube client's default
             // read timeout is much longer than the deadline) can't keep us
             // acting as leader after another candidate may have taken over
             let remaining = self.renew_deadline.saturating_sub(last_renew.elapsed());
+            let started = Instant::now();
             match tokio::time::timeout(remaining, self.renew()).await {
-                Ok(Ok(true)) => last_renew = Instant::now(),
+                Ok(Ok(true)) => last_renew = started,
                 Ok(Ok(false)) => {
                     warn!(
                         lease_name = %self.lease_name,
@@ -293,10 +375,9 @@ impl LeaderElection {
     /// Voluntarily release the lease if we hold it, allowing another
     /// candidate to take it over immediately rather than waiting for it to
     /// expire. Call this during graceful shutdown, after the controller has
-    /// stopped reconciling (for instance, after
-    /// [`run_with_leader_election`](crate::Controller::run_with_leader_election)
-    /// has been dropped in response to a termination signal, using a clone
-    /// of the `LeaderElection` passed to it). This is best-effort: errors
+    /// stopped reconciling (for instance, after the future returned by
+    /// [`with_lease`](LeaderElection::with_lease) has been dropped in
+    /// response to a termination signal). This is best-effort: errors
     /// are logged and ignored, since the lease will expire on its own
     /// regardless.
     pub async fn release(&self) {

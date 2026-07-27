@@ -16,8 +16,6 @@ use rand::{Rng, rng};
 use tracing::field::Empty;
 use tracing::{Instrument, Span, error, info, info_span, trace, warn};
 
-use crate::leader_election::LeaderElection;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error<E: std::error::Error + 'static> {
     #[error("{0}")]
@@ -151,6 +149,10 @@ where
     /// method called when a resource is created or updated, and its
     /// [`cleanup`](Context::cleanup) method called when a resource is about
     /// to be deleted.
+    ///
+    /// To run multiple replicas of a controller with only one reconciling
+    /// at a time, pass this method's future to
+    /// [`LeaderElection::with_lease`](crate::LeaderElection::with_lease).
     pub async fn run(self) {
         let Self {
             client,
@@ -202,38 +204,6 @@ where
                 }
             })
             .await
-    }
-
-    /// Run the controller, using leader election to ensure that only one
-    /// instance is reconciling at a time. This allows running multiple
-    /// replicas of a controller (for instance, to avoid downtime of
-    /// webhooks served by the same process during rollouts) without
-    /// resources being reconciled by more than one replica concurrently.
-    ///
-    /// This method first waits until the leadership lease described by
-    /// `leader_election` is acquired, then runs the controller as in
-    /// [`run`](Self::run) while renewing the lease in the background. If
-    /// leadership is lost (because the lease could not be renewed in time,
-    /// or was taken over by another candidate), the controller is stopped
-    /// and this method returns. Unlike [`run`](Self::run), this method
-    /// *does* return, and when it does, the process should be exited
-    /// promptly (letting Kubernetes restart it) so that no in-flight
-    /// reconciliation outlives the lease.
-    ///
-    /// During graceful shutdown (for instance, on receiving a termination
-    /// signal), drop the future returned by this method to stop the
-    /// controller, then call [`LeaderElection::release`] on a clone of
-    /// `leader_election` to hand leadership over immediately rather than
-    /// making the other replicas wait for the lease to expire.
-    pub async fn run_with_leader_election(self, leader_election: LeaderElection) {
-        leader_election.acquire().await;
-        let run = self.run();
-        let lost = leader_election.hold();
-        futures::pin_mut!(run, lost);
-        // `run` never completes, so this returns only when leadership is
-        // lost; dropping `run` stops the controller
-        futures::future::select(run, lost).await;
-        warn!("lost leadership lease; the controller has been stopped");
     }
 
     /// Allow configuring the underlying [`kube_runtime::Controller`]. For
