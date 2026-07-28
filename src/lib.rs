@@ -170,7 +170,121 @@
 //! }
 //! # }
 //! ```
+//!
+//! If you run multiple replicas of your controller (for instance, to avoid
+//! downtime of webhooks served by the same process during rollouts), you
+//! can use [leader election](LeaderElection) to ensure that only one
+//! replica reconciles at a time:
+//!
+//! ```no_run
+//! # use std::collections::BTreeSet;
+//! # use std::sync::{Arc, Mutex};
+//! # use k8s_openapi::api::core::v1::Pod;
+//! # use kube::{Config, Client};
+//! # use kube_runtime::controller::Action;
+//! # use kube_runtime::watcher;
+//! # #[derive(Default, Clone)]
+//! # struct PodCounter {
+//! #     pods: Arc<Mutex<BTreeSet<String>>>,
+//! # }
+//! # #[async_trait::async_trait]
+//! # impl k8s_controller::Context for PodCounter {
+//! #     type Resource = Pod;
+//! #     type Error = kube::Error;
+//! #     const FINALIZER_NAME: Option<&'static str> = Some("example.com/pod-counter");
+//! #     async fn apply(
+//! #         &self,
+//! #         client: Client,
+//! #         pod: &Self::Resource,
+//! #         _metadata: &mut k8s_controller::TraceMetadata,
+//! #     ) -> Result<Option<Action>, Self::Error> { todo!() }
+//! # }
+//! # async fn foo() {
+//! # let kube_config = Config::infer().await.unwrap();
+//! # let kube_client = Client::try_from(kube_config).unwrap();
+//! # let context = PodCounter::default();
+//! let leader_election = k8s_controller::LeaderElection::new(
+//!     kube_client.clone(),
+//!     "my-namespace",
+//!     "pod-counter",
+//!     // must be unique per replica; the pod name is a good choice
+//!     &std::env::var("HOSTNAME").unwrap(),
+//! );
+//! loop {
+//!     let controller = k8s_controller::Controller::namespaced_all(
+//!         kube_client.clone(),
+//!         context.clone(),
+//!         watcher::Config::default(),
+//!     );
+//!     leader_election.with_lease(controller.run()).await;
+//!     // leadership was lost; the controller has been stopped, and we loop
+//!     // to rejoin the election. Exiting the process (and letting
+//!     // Kubernetes restart it) works too, and is preferable if your
+//!     // reconcilers spawn tasks or do blocking work that stopping the
+//!     // controller can't cancel.
+//! }
+//! # }
+//! ```
+//!
+//! A process that runs several controllers should usually guard them all
+//! with a single lease, rather than electing a separate leader per
+//! controller (which could scatter the controllers across replicas). Use
+//! [`LeaderElection::with_lease`] with a future that runs all of them:
+//!
+//! ```no_run
+//! # use std::collections::BTreeSet;
+//! # use std::sync::{Arc, Mutex};
+//! # use k8s_openapi::api::core::v1::Pod;
+//! # use kube::{Config, Client};
+//! # use kube_runtime::controller::Action;
+//! # use kube_runtime::watcher;
+//! # #[derive(Default, Clone)]
+//! # struct PodCounter {
+//! #     pods: Arc<Mutex<BTreeSet<String>>>,
+//! # }
+//! # #[async_trait::async_trait]
+//! # impl k8s_controller::Context for PodCounter {
+//! #     type Resource = Pod;
+//! #     type Error = kube::Error;
+//! #     const FINALIZER_NAME: Option<&'static str> = Some("example.com/pod-counter");
+//! #     async fn apply(
+//! #         &self,
+//! #         client: Client,
+//! #         pod: &Self::Resource,
+//! #         _metadata: &mut k8s_controller::TraceMetadata,
+//! #     ) -> Result<Option<Action>, Self::Error> { todo!() }
+//! # }
+//! # async fn foo() {
+//! # let kube_config = Config::infer().await.unwrap();
+//! # let kube_client = Client::try_from(kube_config).unwrap();
+//! # let leader_election = k8s_controller::LeaderElection::new(
+//! #     kube_client.clone(),
+//! #     "my-namespace",
+//! #     "pod-counter",
+//! #     &std::env::var("HOSTNAME").unwrap(),
+//! # );
+//! let controller_a = k8s_controller::Controller::namespaced(
+//!     kube_client.clone(),
+//!     PodCounter::default(),
+//!     "namespace-a",
+//!     watcher::Config::default(),
+//! );
+//! let controller_b = k8s_controller::Controller::namespaced(
+//!     kube_client.clone(),
+//!     PodCounter::default(),
+//!     "namespace-b",
+//!     watcher::Config::default(),
+//! );
+//! leader_election
+//!     .with_lease(futures::future::join(controller_a.run(), controller_b.run()))
+//!     .await;
+//! // leadership was lost; both controllers have been stopped
+//! std::process::exit(1);
+//! # }
+//! ```
 
 mod controller;
+mod leader_election;
 
 pub use controller::{Context, Controller, TraceMetadata};
+pub use leader_election::LeaderElection;

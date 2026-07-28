@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.0] - 2026-07-22
+
+### Added
+
+* `LeaderElection`, providing lease-based leader election so that multiple
+  replicas of a controller can run with only one reconciling at a time.
+  `LeaderElection::with_lease` runs an arbitrary future (for instance, one
+  or several `Controller::run` futures) while holding the lease.
+  `LeaderElection::release` allows handing leadership over immediately
+  during graceful shutdown.
+
+### Changed
+
+* `k8s-openapi` is now a regular dependency, with no version feature
+  enabled; the final binary crate is responsible for enabling one.
+* Update the k8s-openapi version feature used in CI and tests to `v1_34`.
+
 ## [0.3.2] - 2024-07-23
 
 ### Changed

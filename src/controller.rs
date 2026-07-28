@@ -149,6 +149,10 @@ where
     /// method called when a resource is created or updated, and its
     /// [`cleanup`](Context::cleanup) method called when a resource is about
     /// to be deleted.
+    ///
+    /// To run multiple replicas of a controller with only one reconciling
+    /// at a time, pass this method's future to
+    /// [`LeaderElection::with_lease`](crate::LeaderElection::with_lease).
     pub async fn run(self) {
         let Self {
             client,
