@@ -67,3 +67,10 @@ loop {
     sleep(Duration::from_secs(1));
 }
 ```
+
+## Observability
+
+Controllers can report reconciliation metrics to a `ReconcileObserver`
+(with a Prometheus implementation behind the `prometheus` feature), and
+publish Kubernetes events on resources whose reconciliation fails. See the
+crate documentation for details.

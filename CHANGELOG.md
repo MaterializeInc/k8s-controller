@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* Reconciliation metrics. `Controller::with_observer` reports every
+  reconciliation pass to a `ReconcileObserver`, with its `Phase` (`init`,
+  `apply`, `cleanup`, or `delete`), `Outcome` (`completed`, `waiting`,
+  `skipped`, `failed`, or `abandoned`), and duration. Reconcilers can time
+  named steps of their work with `TraceMetadata::step`, and override a
+  pass's outcome with `TraceMetadata::set_outcome`. Passes cancelled mid-way
+  (for instance, on losing a leadership lease) are reported as abandoned.
+* `PrometheusMetrics`, behind the new `prometheus` feature, a
+  `ReconcileObserver` exporting `<namespace>_reconciliations_total`,
+  `<namespace>_reconciliation_duration_seconds`,
+  `<namespace>_reconciliation_steps_total`, and
+  `<namespace>_reconciliation_step_duration_seconds`.
+* Kubernetes events, in the new `events` module. `EventRecorder` publishes
+  `events.k8s.io/v1` events, aggregating identical repeats into a single
+  event's series and truncating overlong notes. `Controller::with_event_recorder`
+  publishes an event on the resource whenever reconciling it fails, as
+  determined by the new `Context::failure_event` hook, and enables
+  `TraceMetadata::publish_event` for reconcilers' own events.
+* `Controller::with_name`, naming a controller in its metrics and tracing
+  span.
+* `Error` is now exported, along with `Error::display_chain`, so that
+  `Context::error_action` can be overridden outside this crate.
+
+### Changed
+
+* The `controller` field of the `reconcile` tracing span now defaults to the
+  resource kind for contexts without a finalizer, rather than being empty.
+* The `reconcile` tracing span has a new `outcome` field.
+
 ## [0.12.0] - 2026-07-22
 
 ### Added
