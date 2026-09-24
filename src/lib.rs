@@ -298,6 +298,12 @@
 //!   publish events of their own through the same recorder. See the
 //!   [`events`] module.
 //!
+//! * report the state of a resource through the standard
+//!   `status.conditions`, maintained with the [`conditions`] module, which
+//!   keeps `lastTransitionTime` and `observedGeneration` consistent with
+//!   Kubernetes conventions. Writing the status remains up to the
+//!   reconciler.
+//!
 //! A single observer and event recorder are typically shared by every
 //! controller in a process:
 //!
@@ -381,6 +387,7 @@
 //! # }
 //! ```
 
+pub mod conditions;
 mod controller;
 pub mod events;
 mod leader_election;

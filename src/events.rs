@@ -95,8 +95,13 @@ pub struct Event {
 pub struct EventRecorder {
     client: Client,
     reporter: Reporter,
-    series: Mutex<HashMap<SeriesKey, Series>>,
+    series: Mutex<HashMap<SeriesKey, Slot>>,
 }
+
+/// The series published under one [`SeriesKey`], locked for the whole of a
+/// publish so that concurrent publishes of the same event cannot both
+/// create it, or both patch it to the same count.
+type Slot = Arc<tokio::sync::Mutex<Option<Series>>>;
 
 /// Identifies the events that can aggregate into one another.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -198,22 +203,34 @@ impl EventRecorder {
             note: event.note.as_deref().map(truncate_note),
             ..(*event).clone()
         };
-        let key = reference.uid.clone().map(|uid| SeriesKey {
+        let namespace = reference
+            .namespace
+            .clone()
+            .unwrap_or_else(|| CLUSTER_EVENT_NAMESPACE.to_owned());
+        let Some(uid) = reference.uid.clone() else {
+            self.create(&namespace, reference, &event).await?;
+            return Ok(());
+        };
+        let slot = self.slot(SeriesKey {
             origin: origin.cloned(),
             uid,
             reason: event.reason.clone(),
             action: event.action.clone(),
         });
+        let mut series = slot.lock().await;
 
-        if let Some(key) = &key
-            && let Some((namespace, name, count)) = self.repeat_of(key, &event)
+        if let Some(series) = series
+            .as_mut()
+            .filter(|s| s.event == event && s.last_published.elapsed() < SERIES_WINDOW)
         {
-            match self.patch_series(&namespace, &name, count).await {
+            let count = series.count.saturating_add(1);
+            match self
+                .patch_series(&series.namespace, &series.name, count)
+                .await
+            {
                 Ok(()) => {
-                    if let Some(series) = self.series.lock().unwrap().get_mut(key) {
-                        series.count = count;
-                        series.last_published = Instant::now();
-                    }
+                    series.count = count;
+                    series.last_published = Instant::now();
                     return Ok(());
                 }
                 // The API server deletes events some time after their last
@@ -224,39 +241,31 @@ impl EventRecorder {
             }
         }
 
-        let namespace = reference
-            .namespace
-            .clone()
-            .unwrap_or_else(|| CLUSTER_EVENT_NAMESPACE.to_owned());
         let created = self.create(&namespace, reference, &event).await?;
-        if let Some(key) = key {
-            self.series.lock().unwrap().insert(
-                key,
-                Series {
-                    event,
-                    namespace,
-                    name: created.name_any(),
-                    count: 1,
-                    last_published: Instant::now(),
-                },
-            );
-        }
+        *series = Some(Series {
+            event,
+            namespace,
+            name: created.name_any(),
+            count: 1,
+            last_published: Instant::now(),
+        });
         Ok(())
     }
 
-    /// If `event` should aggregate into the series last published under
-    /// `key`, returns that series' event's namespace, name, and new count.
-    fn repeat_of(&self, key: &SeriesKey, event: &Event) -> Option<(String, String, i32)> {
-        let mut series = self.series.lock().unwrap();
+    /// Returns the slot for `key`, evicting the slots of series that can no
+    /// longer be aggregated into.
+    fn slot(&self, key: SeriesKey) -> Slot {
+        let mut slots = self.series.lock().unwrap();
         let now = Instant::now();
-        series.retain(|_, s| now.duration_since(s.last_published) < SERIES_WINDOW);
-        series.get(key).filter(|s| s.event == *event).map(|s| {
-            (
-                s.namespace.clone(),
-                s.name.clone(),
-                s.count.saturating_add(1),
-            )
-        })
+        slots.retain(|k, slot| {
+            *k == key
+                || slot.try_lock().map_or(true, |series| {
+                    series
+                        .as_ref()
+                        .is_some_and(|s| now.duration_since(s.last_published) < SERIES_WINDOW)
+                })
+        });
+        Arc::clone(slots.entry(key).or_default())
     }
 
     async fn create(
@@ -443,6 +452,25 @@ mod tests {
                 assert_eq!(req.body["series"]["count"], json!(count));
                 assert!(req.body["series"]["lastObservedTime"].is_string());
             }
+        });
+    }
+
+    #[test]
+    fn concurrent_identical_events_aggregate() {
+        block_on(async {
+            let server = MockApiServer::new();
+            let recorder = recorder(&server);
+            let cm = config_map("uid-1");
+            let ev = event("it broke");
+            let results =
+                futures::future::join_all((0..3).map(|_| recorder.publish(&cm, &ev))).await;
+            assert!(results.iter().all(Result::is_ok));
+
+            let requests = server.requests();
+            let methods: Vec<_> = requests.iter().map(|r| r.method.as_str()).collect();
+            assert_eq!(methods, ["POST", "PATCH", "PATCH"]);
+            assert_eq!(requests[1].body["series"]["count"], json!(2));
+            assert_eq!(requests[2].body["series"]["count"], json!(3));
         });
     }
 

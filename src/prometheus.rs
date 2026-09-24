@@ -53,9 +53,7 @@ pub struct PrometheusMetrics {
 
 impl PrometheusMetrics {
     /// The default histogram buckets, in seconds.
-    pub const DEFAULT_BUCKETS: &[f64] = &[
-        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
-    ];
+    pub const DEFAULT_BUCKETS: &[f64] = &[0.01, 0.05, 0.25, 1.0, 5.0, 30.0];
 
     /// Creates the metrics, with names prefixed by `namespace` (which may be
     /// empty, for no prefix) and histograms using
@@ -132,21 +130,36 @@ impl ReconcileObserver for PrometheusMetrics {
     }
 }
 
+impl PrometheusMetrics {
+    fn collectors(&self) -> [&dyn Collector; 4] {
+        let Self {
+            reconciliations,
+            reconciliation_duration,
+            steps,
+            step_duration,
+        } = self;
+        [
+            reconciliations,
+            reconciliation_duration,
+            steps,
+            step_duration,
+        ]
+    }
+}
+
 impl Collector for PrometheusMetrics {
     fn desc(&self) -> Vec<&Desc> {
-        let mut desc = self.reconciliations.desc();
-        desc.extend(self.reconciliation_duration.desc());
-        desc.extend(self.steps.desc());
-        desc.extend(self.step_duration.desc());
-        desc
+        self.collectors()
+            .into_iter()
+            .flat_map(Collector::desc)
+            .collect()
     }
 
     fn collect(&self) -> Vec<MetricFamily> {
-        let mut families = self.reconciliations.collect();
-        families.extend(self.reconciliation_duration.collect());
-        families.extend(self.steps.collect());
-        families.extend(self.step_duration.collect());
-        families
+        self.collectors()
+            .into_iter()
+            .flat_map(Collector::collect)
+            .collect()
     }
 }
 

@@ -15,13 +15,20 @@
   `ReconcileObserver` exporting `<namespace>_reconciliations_total`,
   `<namespace>_reconciliation_duration_seconds`,
   `<namespace>_reconciliation_steps_total`, and
-  `<namespace>_reconciliation_step_duration_seconds`.
+  `<namespace>_reconciliation_step_duration_seconds`, with histogram
+  buckets from 10ms to 30s by default.
 * Kubernetes events, in the new `events` module. `EventRecorder` publishes
   `events.k8s.io/v1` events, aggregating identical repeats into a single
   event's series and truncating overlong notes. `Controller::with_event_recorder`
   publishes an event on the resource whenever reconciling it fails, as
   determined by the new `Context::failure_event` hook, and enables
   `TraceMetadata::publish_event` for reconcilers' own events.
+* The `conditions` module, for maintaining a resource's standard
+  `status.conditions`. `conditions::set` applies a `DesiredCondition`,
+  keeping `lastTransitionTime` unless the condition's status changes, and
+  reports whether anything changed (and so whether the status needs
+  writing). `conditions::find_observed` ignores conditions determined from
+  an older generation of the resource.
 * `Controller::with_name`, naming a controller in its metrics and tracing
   span.
 * `Error` is now exported, along with `Error::display_chain`, so that

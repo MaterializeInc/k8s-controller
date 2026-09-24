@@ -44,9 +44,9 @@ impl<E: std::error::Error + 'static> Error<E> {
         let mut source = self.source();
         while let Some(err) = source {
             let message = err.to_string();
-            // Error types commonly include their source's message in their
-            // own (as this one does), which a naive join would repeat.
-            if !out.contains(&message) {
+            // Error types commonly end their own message with their source's
+            // (as this one does), which a naive join would repeat.
+            if !out.ends_with(&message) {
                 out.push_str(": ");
                 out.push_str(&message);
             }
@@ -952,5 +952,15 @@ mod tests {
         struct Outer(#[source] std::io::Error);
         let err: Error<Outer> = Error::ControllerError(Outer(std::io::Error::other("inner")));
         assert_eq!(err.display_chain(), "outer: inner");
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("reading lock: timed out waiting for lock")]
+        struct Mentions(#[source] std::io::Error);
+        let err: Error<Mentions> =
+            Error::ControllerError(Mentions(std::io::Error::other("timed out")));
+        assert_eq!(
+            err.display_chain(),
+            "reading lock: timed out waiting for lock: timed out"
+        );
     }
 }
