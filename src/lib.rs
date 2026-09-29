@@ -282,9 +282,126 @@
 //! std::process::exit(1);
 //! # }
 //! ```
+//!
+//! # Observability
+//!
+//! Every reconciliation pass is logged, as a `reconcile` [tracing]
+//! span. Beyond that, a [`Controller`] can be configured to:
+//!
+//! * report each pass, and each [step](Step) a reconciler divides its work
+//!   into, to a [`ReconcileObserver`], for metrics. With the `prometheus`
+//!   feature, [`PrometheusMetrics`] exports these
+//!   as Prometheus metrics. See the [`observe`] module.
+//! * publish a Kubernetes event on the resource whenever reconciling it
+//!   fails, through an [`EventRecorder`](events::EventRecorder), so that
+//!   `kubectl describe` explains why it is not converging. Reconcilers can
+//!   publish events of their own through the same recorder. See the
+//!   [`events`] module.
+//!
+//! * report the state of a resource through the standard
+//!   `status.conditions`, maintained with the [`conditions`] module, which
+//!   keeps `lastTransitionTime` and `observedGeneration` consistent with
+//!   Kubernetes conventions. Writing the status remains up to the
+//!   reconciler.
+//!
+//! A single observer is typically shared by every controller in a process,
+//! while each controller gets its own event recorder, whose reporter names
+//! that controller:
+//!
+//! ```no_run
+//! # use std::collections::BTreeSet;
+//! # use std::sync::{Arc, Mutex};
+//! # use k8s_openapi::api::core::v1::Pod;
+//! # use kube::{Config, Client};
+//! # use kube_runtime::controller::Action;
+//! # use kube_runtime::watcher;
+//! # #[derive(Default, Clone)]
+//! # struct PodCounter {
+//! #     pods: Arc<Mutex<BTreeSet<String>>>,
+//! # }
+//! # #[async_trait::async_trait]
+//! # impl k8s_controller::Context for PodCounter {
+//! #     type Resource = Pod;
+//! #     type Error = kube::Error;
+//! #     async fn apply(
+//! #         &self,
+//! #         client: Client,
+//! #         pod: &Self::Resource,
+//! #         _metadata: &mut k8s_controller::TraceMetadata,
+//! #     ) -> Result<Option<Action>, Self::Error> { todo!() }
+//! # }
+//! # struct MyObserver;
+//! # impl k8s_controller::ReconcileObserver for MyObserver {}
+//! # async fn foo() {
+//! # let kube_client = Client::try_from(Config::infer().await.unwrap()).unwrap();
+//! use k8s_controller::events::{EventRecorder, Reporter};
+//!
+//! let observer: Arc<dyn k8s_controller::ReconcileObserver> = Arc::new(MyObserver);
+//! let events = Arc::new(EventRecorder::new(
+//!     kube_client.clone(),
+//!     Reporter {
+//!         controller: "example.com/pod-counter".to_owned(),
+//!         instance: std::env::var("HOSTNAME").ok(),
+//!     },
+//! ));
+//! let controller = k8s_controller::Controller::namespaced_all(
+//!     kube_client,
+//!     PodCounter::default(),
+//!     watcher::Config::default(),
+//! )
+//! .with_name("pod-counter")
+//! .with_observer(Arc::clone(&observer))
+//! .with_event_recorder(Arc::clone(&events));
+//! controller.run().await;
+//! # }
+//! ```
+//!
+//! Within a reconciler, steps are started from the [`TraceMetadata`] passed
+//! to [`Context::apply`] and [`Context::cleanup`]:
+//!
+//! ```no_run
+//! # use kube::Client;
+//! # use kube_runtime::controller::Action;
+//! # use k8s_openapi::api::core::v1::ConfigMap;
+//! # async fn sync_deployment() -> Result<(), kube::Error> { Ok(()) }
+//! # async fn deployment_ready() -> Result<bool, kube::Error> { Ok(true) }
+//! # struct Widgets;
+//! # #[async_trait::async_trait]
+//! # impl k8s_controller::Context for Widgets {
+//! #     type Resource = ConfigMap;
+//! #     type Error = kube::Error;
+//! async fn apply(
+//!     &self,
+//!     client: Client,
+//!     widget: &Self::Resource,
+//!     metadata: &mut k8s_controller::TraceMetadata,
+//! ) -> Result<Option<Action>, Self::Error> {
+//!     let step = metadata.step("deployment");
+//!     sync_deployment().await?;
+//!     if !deployment_ready().await? {
+//!         step.finish(k8s_controller::Outcome::Waiting);
+//!         return Ok(Some(Action::requeue(std::time::Duration::from_secs(5))));
+//!     }
+//!     step.finish(k8s_controller::Outcome::Completed);
+//!     Ok(None)
+//! }
+//! # }
+//! ```
 
+pub mod conditions;
 mod controller;
+pub mod events;
 mod leader_election;
+pub mod observe;
+#[cfg(feature = "prometheus")]
+mod prometheus;
+#[cfg(test)]
+mod test_util;
 
-pub use controller::{Context, Controller, TraceMetadata};
+pub use controller::{Context, Controller, Error};
 pub use leader_election::LeaderElection;
+pub use observe::{
+    Outcome, Phase, ReconcileObserver, ReconcileRecord, Step, StepRecord, TraceMetadata,
+};
+#[cfg(feature = "prometheus")]
+pub use prometheus::PrometheusMetrics;
