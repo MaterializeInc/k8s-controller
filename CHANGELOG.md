@@ -18,11 +18,13 @@
   `<namespace>_reconciliation_step_duration_seconds`, with histogram
   buckets from 10ms to 30s by default.
 * Kubernetes events, in the new `events` module. `EventRecorder` publishes
-  `events.k8s.io/v1` events, aggregating identical repeats into a single
-  event's series and truncating overlong notes. `Controller::with_event_recorder`
-  publishes an event on the resource whenever reconciling it fails, as
-  determined by the new `Context::failure_event` hook, and enables
-  `TraceMetadata::publish_event` for reconcilers' own events.
+  `events.k8s.io/v1` events on behalf of one controller, aggregating
+  identical repeats into a single event's series, truncating overlong
+  notes, and giving up after a timeout (5 seconds by default).
+  `Controller::with_event_recorder` publishes an event on the resource
+  whenever reconciling it fails, as determined by the new
+  `Context::failure_event` hook, and enables `TraceMetadata::publish_event`
+  for reconcilers' own events.
 * The `conditions` module, for maintaining a resource's standard
   `status.conditions`. `conditions::set` applies a `DesiredCondition`,
   keeping `lastTransitionTime` unless the condition's status changes, and

@@ -185,11 +185,8 @@ where
     /// its `reconcile` tracing span. Defaults to [`Context::FINALIZER_NAME`]
     /// if set, and otherwise to the kind of the resource being watched.
     ///
-    /// Controllers sharing an [observer](Controller::with_observer) or
-    /// [event recorder](Controller::with_event_recorder) must have distinct
-    /// names, or their metrics will be merged, and one controller
-    /// succeeding will reset the aggregation of the other's failure events
-    /// for the same resource.
+    /// Controllers sharing an [observer](Controller::with_observer) must
+    /// have distinct names, or their metrics will be merged.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into().into());
         self
@@ -208,6 +205,11 @@ where
     /// [`TraceMetadata::publish_event`] for the context's own events. See
     /// the [`events`](crate::events) module, including for the RBAC
     /// permissions this requires.
+    ///
+    /// `events` must not be given to any other controller. Besides every
+    /// event appearing to come from the same controller, a successful pass
+    /// of one controller would reset the aggregation of another's failure
+    /// events for the same resource.
     pub fn with_event_recorder(mut self, events: Arc<EventRecorder>) -> Self {
         self.events = Some(events);
         self
@@ -591,9 +593,8 @@ where
             match &res {
                 Err(e) => {
                     if let Some(event) = ctx.failure_event(&resource, phase, e)
-                        && let Err(publish_err) = events
-                            .publish_as(Some(&instrumentation.name), &pass.reference, &event)
-                            .await
+                        && let Err(publish_err) =
+                            events.publish_to(&pass.reference, &event, true).await
                     {
                         warn!(
                             error = %publish_err,
@@ -604,7 +605,7 @@ where
                 }
                 Ok(_) => {
                     if let Some(uid) = &pass.reference.uid {
-                        events.forget_failures(&instrumentation.name, uid);
+                        events.forget_failures(uid);
                     }
                 }
             }

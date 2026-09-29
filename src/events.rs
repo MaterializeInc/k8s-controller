@@ -11,7 +11,13 @@
 //! resource being reconciled (see [`Context::failure_event`](crate::Context::failure_event)).
 //! Reconcilers can publish events of their own through
 //! [`TraceMetadata::publish_event`](crate::TraceMetadata::publish_event), or
-//! through [`EventRecorder::publish`] directly.
+//! through [`EventRecorder::publish`] directly, which also works outside of
+//! reconciliation (for instance, from a background task).
+//!
+//! Each controller should have its own recorder, whose [`Reporter`] names
+//! that controller, even when several controllers in a process reconcile
+//! the same kind of resource. The reporter is the only thing in an event
+//! that identifies which controller published it.
 //!
 //! # Aggregation
 //!
@@ -27,6 +33,12 @@
 //! the resource next reconciles successfully, so a failure that recurs after
 //! a recovery is reported as a new event rather than as a continuation of
 //! the old one.
+//!
+//! # Timeouts
+//!
+//! Each publish is bounded by the recorder's [timeout](EventRecorder::with_timeout),
+//! so that an unresponsive API server delays the reconciliation publishing
+//! an event by at most that long.
 //!
 //! # RBAC
 //!
@@ -58,6 +70,10 @@ pub const SERIES_WINDOW: Duration = Duration::from_secs(10 * 60);
 /// many bytes.
 pub const MAX_NOTE_BYTES: usize = 1024;
 
+/// The default [timeout](EventRecorder::with_timeout) for publishing an
+/// event.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Namespace used for events about cluster-scoped resources, which have no
 /// namespace of their own.
 const CLUSTER_EVENT_NAMESPACE: &str = "default";
@@ -87,14 +103,29 @@ pub struct Event {
     pub related: Option<ObjectReference>,
 }
 
-/// Publishes Kubernetes events on resources, aggregating repeats as described
-/// in the [module documentation](self).
+/// An error publishing an event.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PublishError {
+    /// The API server rejected the event, or could not be reached.
+    #[error(transparent)]
+    Kube(#[from] kube::Error),
+    /// Publishing did not complete within the recorder's
+    /// [timeout](EventRecorder::with_timeout).
+    #[error("timed out after {0:?} publishing event")]
+    Timeout(Duration),
+}
+
+/// Publishes Kubernetes events on resources on behalf of one controller,
+/// aggregating repeats as described in the [module documentation](self).
 ///
-/// A single recorder is typically shared (via [`Arc`]) by every controller in
-/// a process, and by the reconcilers that publish events of their own.
+/// Share a recorder (via [`Arc`]) between a [`Controller`](crate::Controller)
+/// and whatever else publishes events on that controller's behalf, but not
+/// between controllers.
 pub struct EventRecorder {
     client: Client,
     reporter: Reporter,
+    timeout: Duration,
     series: Mutex<HashMap<SeriesKey, Slot>>,
 }
 
@@ -106,9 +137,11 @@ type Slot = Arc<tokio::sync::Mutex<Option<Series>>>;
 /// Identifies the events that can aggregate into one another.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SeriesKey {
-    /// The controller whose failure events these are, or `None` for events
-    /// published by reconcilers or other callers.
-    origin: Option<Arc<str>>,
+    /// Whether these are the failure events the controller publishes when
+    /// reconciling the resource fails, as opposed to events published
+    /// through [`EventRecorder::publish`] or
+    /// [`TraceMetadata::publish_event`](crate::TraceMetadata::publish_event).
+    failure: bool,
     uid: String,
     reason: String,
     action: String,
@@ -127,25 +160,38 @@ impl std::fmt::Debug for EventRecorder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EventRecorder")
             .field("reporter", &self.reporter)
+            .field("timeout", &self.timeout)
             .finish_non_exhaustive()
     }
 }
 
 impl EventRecorder {
-    /// Creates a recorder that publishes events as `reporter`.
+    /// Creates a recorder that publishes events as `reporter`, with the
+    /// [default timeout](DEFAULT_TIMEOUT).
     ///
     /// [`Reporter::controller`] becomes each event's `reportingController`,
-    /// and should name the controller (for instance
-    /// `"my-operator.example.com"`). [`Reporter::instance`] becomes each
-    /// event's `reportingInstance`, and should identify the replica, for
-    /// which the pod name is a good choice; if it is `None`, the controller
-    /// name is used instead.
+    /// shown by `kubectl describe` as where the event came from. It should
+    /// name the individual controller, and must be a qualified name (for
+    /// instance `"my-operator.example.com/widgets"`), or the API server
+    /// rejects the event. [`Reporter::instance`] becomes each event's
+    /// `reportingInstance`, and should identify the replica, for which the
+    /// pod name is a good choice; if it is `None`, the controller name is
+    /// used instead.
     pub fn new(client: Client, reporter: Reporter) -> Self {
         Self {
             client,
             reporter,
+            timeout: DEFAULT_TIMEOUT,
             series: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Sets how long publishing an event may take, including any wait for
+    /// a concurrent publish of the same event, before giving up with
+    /// [`PublishError::Timeout`].
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// The reporter this recorder publishes events as.
@@ -160,13 +206,13 @@ impl EventRecorder {
     ///
     /// Events are informational, so callers should usually log a failure to
     /// publish one rather than let it change what they do next.
-    pub async fn publish<K>(&self, resource: &K, event: &Event) -> Result<(), kube::Error>
+    pub async fn publish<K>(&self, resource: &K, event: &Event) -> Result<(), PublishError>
     where
         K: Resource,
         K::DynamicType: Default,
     {
         let reference = resource.object_ref(&Default::default());
-        self.publish_as(None, &reference, event).await
+        self.publish_to(&reference, event, false).await
     }
 
     /// Forgets every event published about `resource`, so that the next
@@ -182,22 +228,37 @@ impl EventRecorder {
         }
     }
 
-    /// Forgets the failure events that `origin` published about the object
-    /// with the given `uid`.
-    pub(crate) fn forget_failures(&self, origin: &Arc<str>, uid: &str) {
+    /// Forgets the failure events published about the object with the given
+    /// `uid`.
+    pub(crate) fn forget_failures(&self, uid: &str) {
         self.series
             .lock()
             .unwrap()
-            .retain(|key, _| key.uid != uid || key.origin.as_ref() != Some(origin));
+            .retain(|key, _| key.uid != uid || !key.failure);
     }
 
-    /// Publishes `event` about the object `reference` refers to, aggregating
-    /// it only with other events from the same `origin`.
-    pub(crate) async fn publish_as(
+    /// Publishes `event` about the object `reference` refers to, as a
+    /// failure event if `failure` is set.
+    pub(crate) async fn publish_to(
         &self,
-        origin: Option<&Arc<str>>,
         reference: &ObjectReference,
         event: &Event,
+        failure: bool,
+    ) -> Result<(), PublishError> {
+        tokio::time::timeout(
+            self.timeout,
+            self.publish_unbounded(reference, event, failure),
+        )
+        .await
+        .map_err(|_| PublishError::Timeout(self.timeout))?
+        .map_err(PublishError::Kube)
+    }
+
+    async fn publish_unbounded(
+        &self,
+        reference: &ObjectReference,
+        event: &Event,
+        failure: bool,
     ) -> Result<(), kube::Error> {
         let event = Event {
             note: event.note.as_deref().map(truncate_note),
@@ -212,7 +273,7 @@ impl EventRecorder {
             return Ok(());
         };
         let slot = self.slot(SeriesKey {
-            origin: origin.cloned(),
+            failure,
             uid,
             reason: event.reason.clone(),
             action: event.action.clone(),
@@ -505,36 +566,42 @@ mod tests {
     }
 
     #[test]
-    fn forget_failures_only_affects_its_origin() {
+    fn forget_failures_keeps_other_events() {
         block_on(async {
             let server = MockApiServer::new();
             let recorder = recorder(&server);
             let cm = config_map("uid-1");
             let reference = cm.object_ref(&());
-            let a: Arc<str> = "a".into();
-            let b: Arc<str> = "b".into();
             recorder
-                .publish_as(Some(&a), &reference, &event("it broke"))
-                .await
-                .unwrap();
-            recorder
-                .publish_as(Some(&b), &reference, &event("it broke"))
+                .publish_to(&reference, &event("it broke"), true)
                 .await
                 .unwrap();
             recorder.publish(&cm, &event("it broke")).await.unwrap();
-            recorder.forget_failures(&a, "uid-1");
+            recorder.forget_failures("uid-1");
             recorder
-                .publish_as(Some(&a), &reference, &event("it broke"))
-                .await
-                .unwrap();
-            recorder
-                .publish_as(Some(&b), &reference, &event("it broke"))
+                .publish_to(&reference, &event("it broke"), true)
                 .await
                 .unwrap();
             recorder.publish(&cm, &event("it broke")).await.unwrap();
 
             let methods: Vec<_> = server.requests().into_iter().map(|r| r.method).collect();
-            assert_eq!(methods, ["POST", "POST", "POST", "POST", "PATCH", "PATCH"]);
+            assert_eq!(methods, ["POST", "POST", "POST", "PATCH"]);
+        });
+    }
+
+    #[test]
+    fn times_out_and_recovers() {
+        block_on(async {
+            let server = MockApiServer::new();
+            let recorder = recorder(&server).with_timeout(Duration::from_millis(50));
+            let cm = config_map("uid-1");
+            server.hang_next_request();
+            let err = recorder.publish(&cm, &event("it broke")).await.unwrap_err();
+            assert!(matches!(err, PublishError::Timeout(_)), "{err:?}");
+
+            recorder.publish(&cm, &event("it broke")).await.unwrap();
+            let methods: Vec<_> = server.requests().into_iter().map(|r| r.method).collect();
+            assert_eq!(methods, ["POST"]);
         });
     }
 

@@ -30,6 +30,7 @@ impl RecordedRequest {
 struct State {
     requests: Vec<RecordedRequest>,
     next_patch_status: Option<u16>,
+    hang_next: bool,
     created: usize,
 }
 
@@ -54,11 +55,19 @@ impl MockApiServer {
         self.state.lock().unwrap().next_patch_status = Some(code);
     }
 
+    /// Makes the next request never receive a response. It is not recorded.
+    pub fn hang_next_request(&self) {
+        self.state.lock().unwrap().hang_next = true;
+    }
+
     pub fn client(&self) -> Client {
         let state = Arc::clone(&self.state);
         let service = tower::service_fn(move |req: http::Request<Body>| {
             let state = Arc::clone(&state);
             async move {
+                if std::mem::take(&mut state.lock().unwrap().hang_next) {
+                    std::future::pending::<()>().await;
+                }
                 let method = req.method().to_string();
                 let path = req.uri().path().to_owned();
                 let bytes = req.into_body().collect_bytes().await.unwrap();

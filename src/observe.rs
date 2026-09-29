@@ -367,7 +367,7 @@ impl TraceMetadata {
     pub async fn publish_event(&self, event: Event) {
         let Some(pass) = &self.pass else { return };
         let Some(events) = &pass.events else { return };
-        if let Err(e) = events.publish_as(None, &pass.reference, &event).await {
+        if let Err(e) = events.publish_to(&pass.reference, &event, false).await {
             warn!(
                 error = %e,
                 reason = %event.reason,

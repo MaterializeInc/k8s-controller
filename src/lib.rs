@@ -304,8 +304,9 @@
 //!   Kubernetes conventions. Writing the status remains up to the
 //!   reconciler.
 //!
-//! A single observer and event recorder are typically shared by every
-//! controller in a process:
+//! A single observer is typically shared by every controller in a process,
+//! while each controller gets its own event recorder, whose reporter names
+//! that controller:
 //!
 //! ```no_run
 //! # use std::collections::BTreeSet;
@@ -339,7 +340,7 @@
 //! let events = Arc::new(EventRecorder::new(
 //!     kube_client.clone(),
 //!     Reporter {
-//!         controller: "pod-counter.example.com".to_owned(),
+//!         controller: "example.com/pod-counter".to_owned(),
 //!         instance: std::env::var("HOSTNAME").ok(),
 //!     },
 //! ));
