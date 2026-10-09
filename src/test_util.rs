@@ -34,8 +34,9 @@ struct State {
     created: usize,
 }
 
-/// Accepts every request, recording it. Creates respond with the submitted
-/// object, named from its `generateName`; patches respond with a stub object.
+/// Accepts every request with a valid name, recording it. Creates respond
+/// with the submitted object, named from its `generateName` if it has no
+/// name; patches respond with a stub object.
 #[derive(Clone, Default)]
 pub struct MockApiServer {
     state: Arc<Mutex<State>>,
@@ -79,17 +80,25 @@ impl MockApiServer {
 
                 let mut state = state.lock().unwrap();
                 let (status, response) = match method.as_str() {
-                    "POST" => {
-                        state.created += 1;
-                        let mut response = body.clone();
-                        let prefix = response["metadata"]["generateName"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_owned();
-                        response["metadata"]["name"] =
-                            Value::String(format!("{prefix}{}", state.created));
-                        (201, response)
-                    }
+                    "POST" => match created_name(&body["metadata"], state.created + 1) {
+                        Ok(name) => {
+                            state.created += 1;
+                            let mut response = body.clone();
+                            response["metadata"]["name"] = Value::String(name);
+                            (201, response)
+                        }
+                        Err(message) => (
+                            422,
+                            json!({
+                                "apiVersion": "v1",
+                                "kind": "Status",
+                                "status": "Failure",
+                                "message": message,
+                                "reason": "Invalid",
+                                "code": 422,
+                            }),
+                        ),
+                    },
                     "PATCH" => match state.next_patch_status.take() {
                         Some(code) => (
                             code,
@@ -131,6 +140,45 @@ impl MockApiServer {
         });
         Client::new(service, "default")
     }
+}
+
+/// The name the API server gives an object created with `metadata`, or why
+/// it rejects the object. Like the API server, this validates `generateName`
+/// as a DNS subdomain except for a trailing `-`, and then appends `suffix`.
+fn created_name(metadata: &Value, suffix: usize) -> Result<String, String> {
+    if let Some(name) = metadata["name"].as_str() {
+        return if is_dns_subdomain(name) {
+            Ok(name.to_owned())
+        } else {
+            Err(format!("metadata.name: Invalid value: {name:?}"))
+        };
+    }
+    let Some(prefix) = metadata["generateName"].as_str() else {
+        return Err("metadata.name: Required value".to_owned());
+    };
+    let masked = match prefix.strip_suffix('-') {
+        Some(rest) => format!("{rest}a"),
+        None => prefix.to_owned(),
+    };
+    if !is_dns_subdomain(&masked) {
+        return Err(format!("metadata.generateName: Invalid value: {prefix:?}"));
+    }
+    Ok(format!("{prefix}{suffix}"))
+}
+
+/// Whether `name` is a lowercase RFC 1123 subdomain, which is what the API
+/// server requires of most object names, including events'.
+pub fn is_dns_subdomain(name: &str) -> bool {
+    name.len() <= 253
+        && name.split('.').all(|label| {
+            let bytes = label.as_bytes();
+            !bytes.is_empty()
+                && bytes[0].is_ascii_alphanumeric()
+                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+                && bytes
+                    .iter()
+                    .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
 }
 
 /// Runs `fut` to completion on a current-thread runtime, as the kube client

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* `EventRecorder` failed to create any event: the API server rejected the
+  `<name>.` `generateName` it used with a 422, since a `generateName` must
+  itself be a valid DNS subdomain apart from a trailing `-`. Events are now
+  named `<name>.<hex nanoseconds>`, as client-go names them.
+
 ## [0.13.0] - 2026-09-29
 
 ### Added

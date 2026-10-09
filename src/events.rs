@@ -336,15 +336,10 @@ impl EventRecorder {
         event: &Event,
     ) -> Result<KubeEvent, kube::Error> {
         let api: Api<KubeEvent> = Api::namespaced(self.client.clone(), namespace);
+        let now = Timestamp::now();
         let event = KubeEvent {
             metadata: ObjectMeta {
-                generate_name: Some(format!(
-                    "{}.",
-                    reference
-                        .name
-                        .as_deref()
-                        .unwrap_or(&self.reporter.controller)
-                )),
+                name: Some(event_name(reference.name.as_deref(), now)),
                 namespace: Some(namespace.to_owned()),
                 ..Default::default()
             },
@@ -358,7 +353,7 @@ impl EventRecorder {
                 }
                 .to_owned(),
             ),
-            event_time: Some(MicroTime(Timestamp::now())),
+            event_time: Some(MicroTime(now)),
             regarding: Some(reference.clone()),
             related: event.related.clone(),
             reporting_controller: Some(self.reporter.controller.clone()),
@@ -392,6 +387,32 @@ impl EventRecorder {
     }
 }
 
+/// The longest name the API server accepts for an event, which must be a
+/// DNS subdomain.
+const MAX_NAME_BYTES: usize = 253;
+
+/// The name of a new event about the object named `regarding`, published at
+/// `time`: `<regarding>.<time in hex nanoseconds>`, as client-go names them.
+///
+/// NOTE: `generateName` cannot produce this shape. The API server validates
+/// the `generateName` prefix as a DNS subdomain in its own right, which may
+/// end in `-` but not in `.`, so a `<regarding>.` prefix fails every create
+/// with a 422.
+fn event_name(regarding: Option<&str>, time: Timestamp) -> String {
+    let suffix = format!(".{:x}", time.as_nanosecond());
+    let mut prefix = regarding.unwrap_or("event");
+    if prefix.len() + suffix.len() > MAX_NAME_BYTES {
+        let mut end = MAX_NAME_BYTES - suffix.len();
+        while !prefix.is_char_boundary(end) {
+            end -= 1;
+        }
+        // Each `.`-separated label of a subdomain must end in an alphanumeric
+        // character, which truncation may have cut down to.
+        prefix = prefix[..end].trim_end_matches(['.', '-']);
+    }
+    format!("{prefix}{suffix}")
+}
+
 /// Shortens `note` to at most [`MAX_NOTE_BYTES`], on a character boundary.
 fn truncate_note(note: &str) -> String {
     if note.len() <= MAX_NOTE_BYTES {
@@ -408,7 +429,7 @@ fn truncate_note(note: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{MockApiServer, block_on};
+    use crate::test_util::{MockApiServer, block_on, is_dns_subdomain};
 
     use k8s_openapi::api::core::v1::ConfigMap;
     use serde_json::json;
@@ -486,8 +507,33 @@ mod tests {
             assert_eq!(req.body["reportingInstance"], "pod-0");
             assert_eq!(req.body["regarding"]["kind"], "ConfigMap");
             assert_eq!(req.body["regarding"]["uid"], "uid-1");
-            assert_eq!(req.body["metadata"]["generateName"], "cm.");
+            let name = req.body["metadata"]["name"].as_str().unwrap();
+            assert!(name.starts_with("cm."), "{name}");
         });
+    }
+
+    #[test]
+    fn test_event_name() {
+        let time = Timestamp::from_nanosecond(0x1234_5678_9abc_def0).unwrap();
+        assert_eq!(event_name(Some("cm"), time), "cm.123456789abcdef0");
+        assert_eq!(event_name(None, time), "event.123456789abcdef0");
+        assert!(is_dns_subdomain(&event_name(
+            Some("12345678-1234-1234-1234-123456789012"),
+            Timestamp::now()
+        )));
+
+        let exact = "a".repeat(MAX_NAME_BYTES - ".123456789abcdef0".len());
+        assert_eq!(
+            event_name(Some(&exact), time),
+            format!("{exact}.123456789abcdef0")
+        );
+
+        // truncation must not leave a label ending in `-` or `.`
+        let long = format!("{}-b.c", "a".repeat(MAX_NAME_BYTES - 18));
+        let name = event_name(Some(&long), time);
+        assert!(name.len() <= MAX_NAME_BYTES, "{name}");
+        assert!(is_dns_subdomain(&name), "{name}");
+        assert!(name.ends_with("aaa.123456789abcdef0"), "{name}");
     }
 
     #[test]
