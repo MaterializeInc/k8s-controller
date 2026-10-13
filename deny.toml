@@ -9,6 +9,9 @@ targets = [
 [advisories]
 version = 2
 ignore = [
+    # `unsafe-libyaml` is unmaintained. It comes in through kube-client 3's
+    # `serde_yaml`, and kube-client 4 replaces that with `serde-saphyr`.
+    { id = "RUSTSEC-2024-0449", reason = "transitive via kube-client 3; fixed by moving to kube 4" },
 ]
 
 [bans]
