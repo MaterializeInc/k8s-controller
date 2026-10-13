@@ -16,6 +16,27 @@ jobs:
         toolchain: 1.89.0
         components: rustfmt, clippy
     - run: cargo fmt -- --check
+    # Clippy and the tests validate the version in this workflow. This step
+    # keeps the copy in release-plz.yml and the dev-dependency feature in sync.
+    - name: Check K8S_OPENAPI_ENABLED_VERSION consistency
+      run: |
+        set -euo pipefail
+        extract() {
+          sed -n 's/^ *K8S_OPENAPI_ENABLED_VERSION: *"\(.*\)"$/\1/p' "$1"
+        }
+        pr=$(extract .github/workflows/pr.yml)
+        release=$(extract .github/workflows/release-plz.yml)
+        feature=$(cargo metadata --no-deps --format-version 1 \
+          | jq -r '.packages[0].dependencies[]
+              | select(.name == "k8s-openapi" and .kind == "dev")
+              | .features[]
+              | select(startswith("v1_"))' \
+          | sed 's/^v1_/1./')
+        echo "pr.yml: '$pr', release-plz.yml: '$release', dev-dependency: '$feature'"
+        if [ -z "$pr" ] || [ "$pr" != "$release" ] || [ "$pr" != "$feature" ]; then
+          echo "::error::K8S_OPENAPI_ENABLED_VERSION must be set in pr.yml and release-plz.yml and match the k8s-openapi dev-dependency feature"
+          exit 1
+        fi
     - run: cargo clippy -- --deny warnings
     - run: cargo install --locked cargo-deny --version=0.19.0
     - run: cargo deny check
