@@ -387,12 +387,14 @@ impl EventRecorder {
     }
 }
 
-/// The longest name the API server accepts for an event, which must be a
-/// DNS subdomain.
-const MAX_NAME_BYTES: usize = 253;
-
 /// The name of a new event about the object named `regarding`, published at
-/// `time`: `<regarding>.<time in hex nanoseconds>`, as client-go names them.
+/// `time`: `<regarding>.<time in hex nanoseconds>`, as client-go names them,
+/// or `event.<time in hex nanoseconds>` if that would not be a valid name.
+///
+/// Not every object's name forms a valid event name: some kinds only require
+/// names to be path segments (RBAC roles may be named `system:foo` or `Foo`),
+/// and a long name leaves no room for the suffix. The event's `regarding`
+/// reference identifies the object either way.
 ///
 /// NOTE: `generateName` cannot produce this shape. The API server validates
 /// the `generateName` prefix as a DNS subdomain in its own right, which may
@@ -400,17 +402,30 @@ const MAX_NAME_BYTES: usize = 253;
 /// with a 422.
 fn event_name(regarding: Option<&str>, time: Timestamp) -> String {
     let suffix = format!(".{:x}", time.as_nanosecond());
-    let mut prefix = regarding.unwrap_or("event");
-    if prefix.len() + suffix.len() > MAX_NAME_BYTES {
-        let mut end = MAX_NAME_BYTES - suffix.len();
-        while !prefix.is_char_boundary(end) {
-            end -= 1;
-        }
-        // Each `.`-separated label of a subdomain must end in an alphanumeric
-        // character, which truncation may have cut down to.
-        prefix = prefix[..end].trim_end_matches(['.', '-']);
-    }
-    format!("{prefix}{suffix}")
+    regarding
+        .map(|regarding| format!("{regarding}{suffix}"))
+        .filter(|name| is_dns_subdomain(name))
+        .unwrap_or_else(|| format!("event{suffix}"))
+}
+
+/// Whether `name` is a lowercase RFC 1123 subdomain: at most 253 bytes of
+/// `.`-separated labels, each at most 63 bytes of lowercase alphanumerics and
+/// `-`, starting and ending with an alphanumeric.
+///
+/// NOTE: The API server's check for event names (`IsDNS1123Subdomain`) does
+/// not limit the length of labels. Enforcing it anyway keeps this check at
+/// least as strict as the API server's.
+pub(crate) fn is_dns_subdomain(name: &str) -> bool {
+    name.len() <= 253
+        && name.split('.').all(|label| {
+            let bytes = label.as_bytes();
+            (1..=63).contains(&bytes.len())
+                && bytes[0].is_ascii_alphanumeric()
+                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+                && bytes
+                    .iter()
+                    .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
 }
 
 /// Shortens `note` to at most [`MAX_NOTE_BYTES`], on a character boundary.
@@ -429,7 +444,7 @@ fn truncate_note(note: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{MockApiServer, block_on, is_dns_subdomain};
+    use crate::test_util::{MockApiServer, block_on};
 
     use k8s_openapi::api::core::v1::ConfigMap;
     use serde_json::json;
@@ -515,25 +530,50 @@ mod tests {
     #[test]
     fn test_event_name() {
         let time = Timestamp::from_nanosecond(0x1234_5678_9abc_def0).unwrap();
-        assert_eq!(event_name(Some("cm"), time), "cm.123456789abcdef0");
-        assert_eq!(event_name(None, time), "event.123456789abcdef0");
-        assert!(is_dns_subdomain(&event_name(
-            Some("12345678-1234-1234-1234-123456789012"),
-            Timestamp::now()
-        )));
-
-        let exact = "a".repeat(MAX_NAME_BYTES - ".123456789abcdef0".len());
+        let suffix = ".123456789abcdef0";
+        let fallback = format!("event{suffix}");
+        assert_eq!(event_name(Some("cm"), time), format!("cm{suffix}"));
         assert_eq!(
-            event_name(Some(&exact), time),
-            format!("{exact}.123456789abcdef0")
+            event_name(Some("12345678-1234-1234-1234-123456789012"), time),
+            format!("12345678-1234-1234-1234-123456789012{suffix}")
         );
+        assert_eq!(event_name(None, time), fallback);
 
-        // truncation must not leave a label ending in `-` or `.`
-        let long = format!("{}-b.c", "a".repeat(MAX_NAME_BYTES - 18));
-        let name = event_name(Some(&long), time);
-        assert!(name.len() <= MAX_NAME_BYTES, "{name}");
-        assert!(is_dns_subdomain(&name), "{name}");
-        assert!(name.ends_with("aaa.123456789abcdef0"), "{name}");
+        // names that only satisfy path-segment rules, as RBAC names may
+        assert_eq!(event_name(Some("system:controller:foo"), time), fallback);
+        assert_eq!(event_name(Some("Foo"), time), fallback);
+
+        let longest_label = "a".repeat(63);
+        assert_eq!(
+            event_name(Some(&longest_label), time),
+            format!("{longest_label}{suffix}")
+        );
+        assert_eq!(event_name(Some(&"a".repeat(64)), time), fallback);
+
+        let longest = vec!["a".repeat(63); 4].join(".")[..253 - suffix.len()].to_owned();
+        assert_eq!(
+            event_name(Some(&longest), time),
+            format!("{longest}{suffix}")
+        );
+        assert_eq!(event_name(Some(&format!("{longest}a")), time), fallback);
+    }
+
+    #[test]
+    fn test_is_dns_subdomain() {
+        assert!(is_dns_subdomain("a"));
+        assert!(is_dns_subdomain("example.com"));
+        assert!(is_dns_subdomain("a-1.b-2"));
+        assert!(is_dns_subdomain(&"a".repeat(63)));
+        assert!(!is_dns_subdomain(""));
+        assert!(!is_dns_subdomain("a."));
+        assert!(!is_dns_subdomain(".a"));
+        assert!(!is_dns_subdomain("a..b"));
+        assert!(!is_dns_subdomain("-a"));
+        assert!(!is_dns_subdomain("a-"));
+        assert!(!is_dns_subdomain("A"));
+        assert!(!is_dns_subdomain("a:b"));
+        assert!(!is_dns_subdomain(&"a".repeat(64)));
+        assert!(!is_dns_subdomain(&vec!["a".repeat(63); 5].join(".")[..254]));
     }
 
     #[test]

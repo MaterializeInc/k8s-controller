@@ -8,6 +8,8 @@ use kube::Client;
 use kube::client::Body;
 use serde_json::{Value, json};
 
+use crate::events::is_dns_subdomain;
+
 #[derive(Clone, Debug)]
 pub struct RecordedRequest {
     pub method: String,
@@ -145,6 +147,8 @@ impl MockApiServer {
 /// The name the API server gives an object created with `metadata`, or why
 /// it rejects the object. Like the API server, this validates `generateName`
 /// as a DNS subdomain except for a trailing `-`, and then appends `suffix`.
+/// [`is_dns_subdomain`] is at least as strict as the API server, so a name
+/// accepted here is accepted there too.
 fn created_name(metadata: &Value, suffix: usize) -> Result<String, String> {
     if let Some(name) = metadata["name"].as_str() {
         return if is_dns_subdomain(name) {
@@ -164,21 +168,6 @@ fn created_name(metadata: &Value, suffix: usize) -> Result<String, String> {
         return Err(format!("metadata.generateName: Invalid value: {prefix:?}"));
     }
     Ok(format!("{prefix}{suffix}"))
-}
-
-/// Whether `name` is a lowercase RFC 1123 subdomain, which is what the API
-/// server requires of most object names, including events'.
-pub fn is_dns_subdomain(name: &str) -> bool {
-    name.len() <= 253
-        && name.split('.').all(|label| {
-            let bytes = label.as_bytes();
-            !bytes.is_empty()
-                && bytes[0].is_ascii_alphanumeric()
-                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
-                && bytes
-                    .iter()
-                    .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        })
 }
 
 /// Runs `fut` to completion on a current-thread runtime, as the kube client

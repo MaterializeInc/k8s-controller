@@ -7,7 +7,9 @@
 * `EventRecorder` failed to create any event: the API server rejected the
   `<name>.` `generateName` it used with a 422, since a `generateName` must
   itself be a valid DNS subdomain apart from a trailing `-`. Events are now
-  named `<name>.<hex nanoseconds>`, as client-go names them.
+  named `<name>.<hex nanoseconds>`, as client-go names them, or
+  `event.<hex nanoseconds>` when that would not be a valid DNS subdomain
+  (for instance, for RBAC objects named like `system:foo`).
 
 ## [0.13.0] - 2026-09-29
 
