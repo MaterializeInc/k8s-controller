@@ -17,6 +17,10 @@ ignore = [
 [bans]
 multiple-versions = "deny"
 skip = [
+    # rand 0.10 uses getrandom 0.4 and cpufeatures 0.3. kube still pulls the
+    # older versions through ahash and through sha2 in pest's build script.
+    { crate = "getrandom@0.3.4", reason = "ahash via kube-runtime and serde-saphyr" },
+    { crate = "cpufeatures@0.2.17", reason = "sha2 0.10 via pest_meta in kube-client" },
 ]
 
 # Use `tracing` instead.
