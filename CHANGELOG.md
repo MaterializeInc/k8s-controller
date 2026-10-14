@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## [0.14.0](https://github.com/MaterializeInc/k8s-controller/compare/v0.13.0...v0.14.0) - 2026-10-14
+
+### Added
+
+- [**breaking**] update kube to 4.2 and k8s-openapi to 0.28 ([#55](https://github.com/MaterializeInc/k8s-controller/pull/55))
+
+### Other
+
+- Bump serde from 1.0.228 to 1.0.229 ([#65](https://github.com/MaterializeInc/k8s-controller/pull/65))
+- Bump futures from 0.3.32 to 0.3.34 ([#64](https://github.com/MaterializeInc/k8s-controller/pull/64))
+- Bump thiserror from 2.0.18 to 2.0.21 ([#63](https://github.com/MaterializeInc/k8s-controller/pull/63))
+- Bump async-trait from 0.1.89 to 0.1.92 ([#67](https://github.com/MaterializeInc/k8s-controller/pull/67))
+- Bump rand from 0.9.4 to 0.10.3 ([#69](https://github.com/MaterializeInc/k8s-controller/pull/69))
+- Bump serde_json from 1.0.150 to 1.0.152 ([#61](https://github.com/MaterializeInc/k8s-controller/pull/61))
+- Bump tokio from 1.52.3 to 1.53.2 ([#62](https://github.com/MaterializeInc/k8s-controller/pull/62))
+- Bump http from 1.4.2 to 1.5.0 ([#60](https://github.com/MaterializeInc/k8s-controller/pull/60))
+- Fall back to an event.<hex> name when the regarding name can't form one
+- Name events explicitly instead of with an invalid generateName
+
 ### Fixed
 
 * `EventRecorder` failed to create any event: the API server rejected the
