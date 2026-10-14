@@ -9,7 +9,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
 use k8s_openapi::jiff::Timestamp;
 use kube::Client;
 use kube::api::{Api, ObjectMeta, PostParams};
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use tracing::{debug, error, info, warn};
 
 /// Lease-based leader election, allowing multiple replicas of a controller
