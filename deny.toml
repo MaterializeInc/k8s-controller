@@ -16,6 +16,8 @@ skip = [
     # older versions through ahash and through sha2 in pest's build script.
     { crate = "getrandom@0.3.4", reason = "ahash via kube-runtime and serde-saphyr" },
     { crate = "cpufeatures@0.2.17", reason = "sha2 0.10 via pest_meta in kube-client" },
+    # async-trait 0.1.92 uses syn 3. The other proc macros still use syn 2.
+    { crate = "syn@2.0.117", reason = "proc macros in kube, futures, serde, thiserror and tracing" },
 ]
 
 # Use `tracing` instead.
