@@ -11,7 +11,7 @@ use kube::{Client, Resource, ResourceExt};
 use kube_runtime::controller::Action;
 use kube_runtime::finalizer::{Event as FinalizerEvent, finalizer};
 use kube_runtime::watcher;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use tracing::field::Empty;
 use tracing::{Instrument, Span, error, info, info_span, trace, warn};
 
