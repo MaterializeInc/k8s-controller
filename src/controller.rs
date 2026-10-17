@@ -54,6 +54,52 @@ impl<E: std::error::Error + 'static> Error<E> {
         }
         out
     }
+
+    /// Whether the API server rejected a write because the object changed
+    /// since the controller read it. Retrying against the newer version
+    /// resolves this on its own.
+    ///
+    /// This covers a `409 Conflict` anywhere in the source chain, for
+    /// instance from a replace with a stale `resourceVersion`, and a failed
+    /// `test` operation in the JSON patch that adds or removes the finalizer.
+    pub fn is_conflict(&self) -> bool {
+        if let Error::FinalizerError(
+            kube_runtime::finalizer::Error::AddFinalizer(e)
+            | kube_runtime::finalizer::Error::RemoveFinalizer(e),
+        ) = self
+            && is_failed_patch_test(e)
+        {
+            return true;
+        }
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(self);
+        while let Some(err) = source {
+            if let Some(kube::Error::Api(status)) = err.downcast_ref::<kube::Error>()
+                && status.code == 409
+                && status.reason == "Conflict"
+            {
+                return true;
+            }
+            source = err.source();
+        }
+        false
+    }
+}
+
+/// Whether `e` is the API server rejecting a JSON patch whose `test`
+/// operation failed.
+fn is_failed_patch_test(e: &kube::Error) -> bool {
+    // Observed: a failed `test` is a 422 whose details name no object kind
+    // and list no causes. A validation failure, which retrying does not fix,
+    // is also a 422 but names the kind and the invalid fields.
+    matches!(
+        e,
+        kube::Error::Api(status)
+            if status.code == 422
+                && status
+                    .details
+                    .as_ref()
+                    .is_none_or(|d| d.kind.is_empty() && d.causes.is_empty())
+    )
 }
 
 /// The observability configured on a [`Controller`], shared by its passes.
@@ -583,7 +629,15 @@ where
 
         if let Err(e) = &res {
             span.record("success", false);
-            error!(error = %e, source = e.source(), "reconcile");
+            if e.is_conflict() {
+                // Conflicts are expected whenever the cache lags the API
+                // server, for instance after a leadership change, and the
+                // retry resolves them. Logging them as errors floods error
+                // trackers that report every error event.
+                warn!(error = %e, source = e.source(), "reconcile");
+            } else {
+                error!(error = %e, source = e.source(), "reconcile");
+            }
         } else {
             span.record("success", true);
             info!("reconcile");
@@ -626,6 +680,8 @@ mod tests {
     use k8s_openapi::api::core::v1::ConfigMap;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
     use k8s_openapi::jiff::Timestamp;
+    use kube::core::Status;
+    use kube::core::response::{StatusCause, StatusDetails, StatusSummary};
 
     use super::*;
     use crate::events::Reporter;
@@ -636,6 +692,8 @@ mod tests {
     enum TestError {
         #[error("reconciling failed: {0}")]
         Wrapped(#[source] std::io::Error),
+        #[error("talking to the API server failed")]
+        Kube(#[source] kube::Error),
     }
 
     #[derive(Clone, Copy)]
@@ -963,5 +1021,104 @@ mod tests {
             err.display_chain(),
             "reading lock: timed out waiting for lock: timed out"
         );
+    }
+
+    fn api_error(code: u16, reason: &str, details: Option<StatusDetails>) -> kube::Error {
+        kube::Error::Api(Box::new(Status {
+            status: Some(StatusSummary::Failure),
+            code,
+            message: String::new(),
+            metadata: None,
+            reason: reason.into(),
+            details,
+        }))
+    }
+
+    #[test]
+    fn conflicts_are_classified() {
+        use kube_runtime::finalizer::Error as F;
+
+        let stale_apply: Error<TestError> = Error::FinalizerError(F::ApplyFailed(TestError::Kube(
+            api_error(409, "Conflict", None),
+        )));
+        assert!(
+            stale_apply.is_conflict(),
+            "409 nested in the context's error"
+        );
+
+        let stale_controller: Error<TestError> =
+            Error::ControllerError(TestError::Kube(api_error(409, "Conflict", None)));
+        assert!(stale_controller.is_conflict(), "409 without a finalizer");
+
+        let failed_test = || {
+            api_error(
+                422,
+                "Invalid",
+                Some(StatusDetails {
+                    name: String::new(),
+                    group: String::new(),
+                    kind: String::new(),
+                    uid: String::new(),
+                    causes: vec![],
+                    retry_after_seconds: 0,
+                }),
+            )
+        };
+        let add: Error<TestError> = Error::FinalizerError(F::AddFinalizer(failed_test()));
+        assert!(
+            add.is_conflict(),
+            "failed patch test when adding the finalizer"
+        );
+        let remove: Error<TestError> = Error::FinalizerError(F::RemoveFinalizer(failed_test()));
+        assert!(
+            remove.is_conflict(),
+            "failed patch test when removing the finalizer"
+        );
+    }
+
+    #[test]
+    fn other_errors_are_not_conflicts() {
+        use kube_runtime::finalizer::Error as F;
+
+        let exists: Error<TestError> =
+            Error::ControllerError(TestError::Kube(api_error(409, "AlreadyExists", None)));
+        assert!(
+            !exists.is_conflict(),
+            "AlreadyExists does not resolve on retry"
+        );
+
+        let invalid = api_error(
+            422,
+            "Invalid",
+            Some(StatusDetails {
+                name: "cm".into(),
+                group: String::new(),
+                kind: "ConfigMap".into(),
+                uid: String::new(),
+                causes: vec![StatusCause {
+                    reason: "FieldValueInvalid".into(),
+                    message: "bad value".into(),
+                    field: "metadata.finalizers[0]".into(),
+                }],
+                retry_after_seconds: 0,
+            }),
+        );
+        let add: Error<TestError> = Error::FinalizerError(F::AddFinalizer(invalid));
+        assert!(
+            !add.is_conflict(),
+            "validation failure of the finalizer patch"
+        );
+
+        let invalid_apply: Error<TestError> = Error::FinalizerError(F::ApplyFailed(
+            TestError::Kube(api_error(422, "Invalid", None)),
+        ));
+        assert!(
+            !invalid_apply.is_conflict(),
+            "422 from the context's own writes"
+        );
+
+        let io: Error<TestError> =
+            Error::ControllerError(TestError::Wrapped(std::io::Error::other("disk on fire")));
+        assert!(!io.is_conflict());
     }
 }
