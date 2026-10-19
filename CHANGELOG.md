@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+* A reconciliation that fails because the object changed since it was read
+  is logged at `info` instead of `error`. This covers a `409 Conflict` from
+  the context's own writes and a failed `test` operation in the finalizer
+  patch. `Error::is_conflict` exposes the classification.
+
 ## [0.14.0](https://github.com/MaterializeInc/k8s-controller/compare/v0.13.0...v0.14.0) - 2026-10-14
 
 ### Added
