@@ -634,7 +634,7 @@ where
                 // server, for instance after a leadership change, and the
                 // retry resolves them. Logging them as errors floods error
                 // trackers that report every error event.
-                warn!(error = %e, source = e.source(), "reconcile");
+                info!(error = %e, source = e.source(), "reconcile");
             } else {
                 error!(error = %e, source = e.source(), "reconcile");
             }

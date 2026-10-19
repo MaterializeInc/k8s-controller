@@ -5,7 +5,7 @@
 ### Changed
 
 * A reconciliation that fails because the object changed since it was read
-  is logged at `warn` instead of `error`. This covers a `409 Conflict` from
+  is logged at `info` instead of `error`. This covers a `409 Conflict` from
   the context's own writes and a failed `test` operation in the finalizer
   patch. `Error::is_conflict` exposes the classification.
 
