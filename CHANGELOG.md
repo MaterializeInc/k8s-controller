@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.14.1](https://github.com/MaterializeInc/k8s-controller/compare/v0.14.0...v0.14.1) - 2026-10-19
+
+### Other
+
+- Bump serde_json from 1.0.152 to 1.0.154 ([#75](https://github.com/MaterializeInc/k8s-controller/pull/75))
+- Bump tokio from 1.53.2 to 1.53.3 ([#74](https://github.com/MaterializeInc/k8s-controller/pull/74))
+- Log reconciliation conflicts at info instead of error ([#73](https://github.com/MaterializeInc/k8s-controller/pull/73))
+
 ### Changed
 
 * A reconciliation that fails because the object changed since it was read
