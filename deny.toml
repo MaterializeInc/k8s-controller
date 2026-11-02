@@ -18,6 +18,8 @@ skip = [
     { crate = "cpufeatures@0.2.17", reason = "sha2 0.10 via pest_meta in kube-client" },
     # async-trait 0.1.92 uses syn 3. The other proc macros still use syn 2.
     { crate = "syn@2.0.117", reason = "proc macros in kube, futures, serde, thiserror and tracing" },
+    # kube-client 5 uses base64 0.23, but k8s-openapi 0.29 and tower-http 0.7 still use 0.22.
+    { crate = "base64@0.22.1", reason = "k8s-openapi and tower-http" },
 ]
 
 # Use `tracing` instead.
