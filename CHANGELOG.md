@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## [0.14.2](https://github.com/MaterializeInc/k8s-controller/compare/v0.14.1...v0.14.2) - 2026-11-02
+## [0.15.0](https://github.com/MaterializeInc/k8s-controller/compare/v0.14.1...v0.14.2) - 2026-11-02
 
 ### Other
 
