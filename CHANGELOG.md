@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.15.0](https://github.com/MaterializeInc/k8s-controller/compare/v0.14.1...v0.14.2) - 2026-11-02
+
+### Other
+
+- Merge pull request #77 from MaterializeInc/dependabot/cargo/tokio-1.54.1
+- Update to kube 5.0.0 and k8s-openapi 0.29.0
+
 ## [0.14.1](https://github.com/MaterializeInc/k8s-controller/compare/v0.14.0...v0.14.1) - 2026-10-19
 
 ### Other
