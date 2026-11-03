@@ -1,81 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigests",
-    "schedule:weekly"
-  ],
+  "extends": ["github>MaterializeInc/renovate-config", "schedule:weekly"],
   "labels": ["A-dependencies"],
-  "minimumReleaseAge": "3 days",
-  "minimumReleaseAgeBehaviour": "timestamp-optional",
-  "lockFileMaintenance": {
-    "enabled": true
-  },
-  "osvVulnerabilityAlerts": true,
   "packageRules": [
-    {
-      "description": "One PR per manager for non-breaking updates. Breaking is decided by each versioning (Cargo semver for crates, so 0.x minors are breaking). matchUpdateTypes keeps majors out regardless, since github-actions versioning reports every upgrade as non-breaking.",
-      "matchIsBreaking": false,
-      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
-      "groupName": "{{manager}} non-breaking"
-    },
-    {
-      "description": "Skip crate releases whose rust-version is newer than constraints.rust.",
-      "matchDatasources": ["crate"],
-      "constraintsFiltering": "strict"
-    },
-    {
-      "description": "Move every Rust toolchain reference (rust image, rust-toolchain.toml, rust-version, CI toolchain, constraints.rust) together. All resolve against the Docker Hub rust tags so only versions the builder image has are proposed. Must come after the non-breaking rule so this groupName wins.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["rust"],
-      "groupName": "Rust toolchain"
-    },
-    {
-      "description": "dtolnay/rust-toolchain version refs are branches, not tags; the custom manager below tracks them.",
-      "matchManagers": ["github-actions"],
-      "matchPackageNames": ["dtolnay/rust-toolchain"],
-      "matchCurrentValue": "/^\\d+\\.\\d+/",
-      "enabled": false
-    },
-    {
-      "description": "The built-in rust-toolchain manager tracks Rust releases, which land before the rust Docker image.",
-      "matchManagers": ["rust-toolchain"],
-      "enabled": false
-    },
-    {
-      "description": "The renovate-config manager tracks constraints.rust against Rust releases; the custom manager below tracks it with the rest of the toolchain instead.",
-      "matchManagers": ["renovate-config"],
-      "matchDepTypes": ["tool-constraint"],
-      "matchPackageNames": ["rust"],
-      "enabled": false
-    },
     {
       "description": "rust-version is the published MSRV, so it and the CI toolchain are raised by hand rather than following the latest Rust.",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["rust"],
       "enabled": false
-    }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Rust toolchain version in rust-toolchain.toml, Cargo.toml rust-version, CI toolchain refs/inputs, and constraints.rust in renovate.json.",
-      "managerFilePatterns": [
-        "/(^|/)rust-toolchain\\.toml$/",
-        "/(^|/)Cargo\\.toml$/",
-        "/^\\.github/workflows/[^/]+\\.ya?ml$/",
-        "/^renovate\\.json$/"
-      ],
-      "matchStrings": [
-        "channel\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\"",
-        "rust-version\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\"",
-        "uses:\\s*dtolnay/rust-toolchain@(?<currentValue>\\d+\\.\\d+\\.\\d+)",
-        "toolchain:\\s*[\"']?(?<currentValue>\\d+\\.\\d+\\.\\d+)",
-        "\"rust\"\\s*:\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
-      ],
-      "depNameTemplate": "rust",
-      "datasourceTemplate": "docker",
-      "versioningTemplate": "docker"
     }
   ],
   "reviewers": ["team:dependency-czars"],
