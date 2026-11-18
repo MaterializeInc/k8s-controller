@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
-use kube::api::Api;
+use json_patch::jsonptr::PointerBuf;
+use json_patch::{AddOperation, PatchOperation, RemoveOperation, TestOperation};
+use kube::api::{Api, Patch, PatchParams};
 use kube::core::{ClusterResourceScope, NamespaceResourceScope};
 use kube::{Client, Resource, ResourceExt};
 use kube_runtime::controller::Action;
-use kube_runtime::finalizer::{Event as FinalizerEvent, finalizer};
 use kube_runtime::watcher;
 use rand::{RngExt, rng};
 use tracing::field::Empty;
@@ -400,13 +402,16 @@ pub trait Context {
     /// This method is called when a watched resource is marked for deletion.
     /// The [`Client`] used by the controller is passed in to allow making
     /// additional API requests, as is the resource which triggered this
-    /// event. If this method returns `Some(action)`, the given action will
-    /// be performed, otherwise if `None` is returned,
-    /// [`success_action`](Self::success_action) will be called to find the
-    /// action to perform.
+    /// event. If this method returns `None`, cleanup is complete and the
+    /// finalizer is removed. If it returns `Some(action)`, cleanup is not yet
+    /// complete: the finalizer is kept and the given action is performed.
+    /// Return a requeue action to have cleanup run again; with
+    /// [`Action::await_change`] it only runs again once the resource
+    /// changes, and until then the resource stays in deletion.
     ///
-    /// `metadata` and the return value are treated as for
-    /// [`apply`](Self::apply).
+    /// `metadata` is treated as for [`apply`](Self::apply). The reported
+    /// [`Outcome`] is too, except that any `Some(action)` is
+    /// [`Waiting`](Outcome::Waiting).
     ///
     /// Note that this method will only be called if a finalizer is used.
     async fn cleanup(
@@ -420,11 +425,11 @@ pub trait Context {
         let _resource = resource;
         let _metadata = metadata;
 
-        Ok(Some(Action::await_change()))
+        Ok(None)
     }
 
-    /// This method is called when a call to [`apply`](Self::apply) or
-    /// [`cleanup`](Self::cleanup) returns `Ok(None)`. It should return the
+    /// This method is called when a call to [`apply`](Self::apply) returns
+    /// `Ok(None)`. It should return the
     /// default [`Action`] to perform. The default implementation will
     /// requeue the event at a random time between 40 and 60 minutes in the
     /// future.
@@ -577,24 +582,110 @@ where
         let mut reconciler_outcome = None;
 
         let res = if let Some(finalizer_name) = Ctx::FINALIZER_NAME {
-            finalizer(&api, finalizer_name, Arc::clone(&resource), |event| async {
-                match event {
-                    FinalizerEvent::Apply(resource) => {
-                        guard.phase = Some(Phase::Apply);
-                        let res = ctx.apply(client, &resource, &mut metadata).await;
-                        reconciler_outcome = Some(Outcome::of_result(&res));
-                        res.map(|action| action.unwrap_or_else(|| ctx.success_action(&resource)))
-                    }
-                    FinalizerEvent::Cleanup(resource) => {
-                        guard.phase = Some(Phase::Cleanup);
-                        let res = ctx.cleanup(client, &resource, &mut metadata).await;
-                        reconciler_outcome = Some(Outcome::of_result(&res));
-                        res.map(|action| action.unwrap_or_else(Action::await_change))
+            // `kube_runtime::finalizer` removes the finalizer whenever cleanup
+            // returns `Ok`, so we manage it ourselves to keep it across
+            // `Ok(Some(action))`. The patches mirror that helper's: a `Test`
+            // op makes them fail if the list changed underneath us.
+            let name = resource.name_unchecked();
+            let finalizer_i = resource
+                .finalizers()
+                .iter()
+                .position(|f| f == finalizer_name);
+            let is_deleting = resource.meta().deletion_timestamp.is_some();
+            match (finalizer_i, is_deleting) {
+                (Some(_), false) => {
+                    guard.phase = Some(Phase::Apply);
+                    let res = ctx.apply(client, &resource, &mut metadata).await;
+                    reconciler_outcome = Some(Outcome::of_result(&res));
+                    res.map(|action| action.unwrap_or_else(|| ctx.success_action(&resource)))
+                        .map_err(|e| {
+                            Error::FinalizerError(kube_runtime::finalizer::Error::ApplyFailed(e))
+                        })
+                }
+                (None, false) => {
+                    // Adding the finalizer triggers a fresh reconcile, which
+                    // runs apply.
+                    let patch = if resource.finalizers().is_empty() {
+                        json_patch::Patch(vec![
+                            PatchOperation::Test(TestOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers")
+                                    .expect("constructed pointer is valid"),
+                                value: serde_json::Value::Null,
+                            }),
+                            PatchOperation::Add(AddOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers")
+                                    .expect("constructed pointer is valid"),
+                                value: vec![finalizer_name].into(),
+                            }),
+                        ])
+                    } else {
+                        // Kubernetes doesn't deduplicate finalizers, so fail
+                        // if anyone else appended in the meantime.
+                        json_patch::Patch(vec![
+                            PatchOperation::Test(TestOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers")
+                                    .expect("constructed pointer is valid"),
+                                value: resource.finalizers().into(),
+                            }),
+                            PatchOperation::Add(AddOperation {
+                                path: PointerBuf::from_str("/metadata/finalizers/-")
+                                    .expect("constructed pointer is valid"),
+                                value: finalizer_name.into(),
+                            }),
+                        ])
+                    };
+                    api.patch::<Ctx::Resource>(&name, &PatchParams::default(), &Patch::Json(patch))
+                        .await
+                        .map(|_| Action::await_change())
+                        .map_err(|e| {
+                            Error::FinalizerError(kube_runtime::finalizer::Error::AddFinalizer(e))
+                        })
+                }
+                (Some(finalizer_i), true) => {
+                    guard.phase = Some(Phase::Cleanup);
+                    let res = ctx.cleanup(client, &resource, &mut metadata).await;
+                    // Any action means cleanup is unfinished, even
+                    // `await_change`, which `of_result` counts as completed.
+                    reconciler_outcome = Some(match &res {
+                        Ok(Some(_)) => Outcome::Waiting,
+                        res => Outcome::of_result(res),
+                    });
+                    match res {
+                        Err(e) => Err(Error::FinalizerError(
+                            kube_runtime::finalizer::Error::CleanupFailed(e),
+                        )),
+                        Ok(Some(action)) => Ok(action),
+                        Ok(None) => {
+                            let finalizer_path = format!("/metadata/finalizers/{finalizer_i}");
+                            let pointer = PointerBuf::from_str(&finalizer_path)
+                                .expect("constructed pointer is valid");
+                            let patch = json_patch::Patch(vec![
+                                PatchOperation::Test(TestOperation {
+                                    path: pointer.clone(),
+                                    value: finalizer_name.into(),
+                                }),
+                                PatchOperation::Remove(RemoveOperation { path: pointer }),
+                            ]);
+                            api.patch::<Ctx::Resource>(
+                                &name,
+                                &PatchParams::default(),
+                                &Patch::Json(patch),
+                            )
+                            .await
+                            .map(|_| Action::await_change())
+                            .map_err(|e| {
+                                Error::FinalizerError(
+                                    kube_runtime::finalizer::Error::RemoveFinalizer(e),
+                                )
+                            })
+                        }
                     }
                 }
-            })
-            .await
-            .map_err(Error::FinalizerError)
+                (None, true) => {
+                    // Our finalizer is already gone: nothing to do.
+                    Ok(Action::await_change())
+                }
+            }
         } else if resource.meta().deletion_timestamp.is_none() {
             guard.phase = Some(Phase::Apply);
             let res = ctx.apply(client, &resource, &mut metadata).await;

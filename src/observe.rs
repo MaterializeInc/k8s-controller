@@ -77,6 +77,10 @@ impl Outcome {
     /// A reconciler that returns a requeue action as a periodic resync after
     /// having fully converged will therefore be reported as waiting, and
     /// should override that with [`TraceMetadata::set_outcome`].
+    ///
+    /// The controller itself reports any `Ok(Some(action))` from
+    /// [`Context::cleanup`](crate::Context::cleanup) as
+    /// [`Waiting`](Outcome::Waiting), since it means cleanup is unfinished.
     pub fn of_result<E>(result: &Result<Option<Action>, E>) -> Self {
         match result {
             Ok(None) => Outcome::Completed,

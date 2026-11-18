@@ -26,16 +26,12 @@ skip = [
 [[bans.deny]]
 name = "env_logger"
 
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
-[[bans.deny]]
-name = "rustls"
-
 [licenses]
 version = 2
 allow = [
     "Apache-2.0",
     "BSD-3-Clause",
+    "ISC",
     "MIT",
     "Unicode-3.0",
     "Zlib",

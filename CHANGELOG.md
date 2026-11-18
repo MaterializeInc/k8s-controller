@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+* **Breaking:** the finalizer is only removed when `Context::cleanup` returns
+  `Ok(None)`. `Ok(Some(action))` now keeps it and performs the action, and is
+  reported as `waiting`. Implementations that return
+  `Ok(Some(Action::await_change()))` once cleanup is done (the previous
+  default) must return `Ok(None)` instead, or deletion will hang.
+
 ## [0.15.0](https://github.com/MaterializeInc/k8s-controller/compare/v0.14.1...v0.14.2) - 2026-11-02
 
 ### Other
